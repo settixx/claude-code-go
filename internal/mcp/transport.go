@@ -111,31 +111,3 @@ func (t *StdioTransport) Close() error {
 	_ = t.stdin.Close()
 	return t.cmd.Process.Kill()
 }
-
-// SSETransport communicates with an MCP server over HTTP Server-Sent Events.
-// This is a stub; full implementation will follow.
-type SSETransport struct {
-	url    string
-	closed atomic.Bool
-}
-
-// NewSSETransport creates an SSE-based transport for the given endpoint URL.
-func NewSSETransport(url string) *SSETransport {
-	return &SSETransport{url: url}
-}
-
-// Send is not yet implemented for SSE transport.
-func (t *SSETransport) Send(_ *JSONRPCRequest) error {
-	return fmt.Errorf("SSE transport not implemented")
-}
-
-// Receive is not yet implemented for SSE transport.
-func (t *SSETransport) Receive() (*JSONRPCResponse, error) {
-	return nil, fmt.Errorf("SSE transport not implemented")
-}
-
-// Close is not yet implemented for SSE transport.
-func (t *SSETransport) Close() error {
-	t.closed.Store(true)
-	return nil
-}

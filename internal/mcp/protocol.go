@@ -7,6 +7,8 @@ const (
 	MethodToolsCall    = "tools/call"
 	MethodResourceList = "resources/list"
 	MethodResourceRead = "resources/read"
+	MethodPromptsList  = "prompts/list"
+	MethodPromptsGet   = "prompts/get"
 	MethodShutdown     = "shutdown"
 )
 

@@ -13,10 +13,13 @@ type Rule struct {
 	ToolPattern    string
 	CommandPattern string
 	Behavior       types.PermissionBehavior
+	Session        bool // true = ephemeral session rule (not persisted)
 }
 
 // RuleSet holds categorized permission rules. Deny rules always take
-// precedence over allow rules during evaluation.
+// precedence over allow rules during evaluation. Session rules (added
+// dynamically via AddAlwaysAllow / AddAlwaysDeny) are checked before
+// file-based rules.
 type RuleSet struct {
 	mu         sync.RWMutex
 	AllowRules []Rule
@@ -81,6 +84,81 @@ func (rs *RuleSet) AddDenyCommandRule(toolPattern, commandPattern string) {
 		Behavior:       types.BehaviorDeny,
 	})
 }
+
+// ---------- Session rules (ephemeral, not persisted) ----------
+
+// AddAlwaysAllow adds a session-scoped allow rule for the given tool/pattern.
+// Session rules take priority and are not persisted to disk.
+func (rs *RuleSet) AddAlwaysAllow(toolName string, pattern string) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	r := Rule{
+		ToolPattern: toolName,
+		Behavior:    types.BehaviorAllow,
+		Session:     true,
+	}
+	if pattern != "" {
+		r.CommandPattern = pattern
+	}
+	rs.AllowRules = append([]Rule{r}, rs.AllowRules...)
+}
+
+// AddAlwaysDeny adds a session-scoped deny rule for the given tool/pattern.
+func (rs *RuleSet) AddAlwaysDeny(toolName string, pattern string) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	r := Rule{
+		ToolPattern: toolName,
+		Behavior:    types.BehaviorDeny,
+		Session:     true,
+	}
+	if pattern != "" {
+		r.CommandPattern = pattern
+	}
+	rs.DenyRules = append([]Rule{r}, rs.DenyRules...)
+}
+
+// RemoveSessionRule removes all ephemeral session rules for the given tool.
+func (rs *RuleSet) RemoveSessionRule(toolName string) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+
+	rs.AllowRules = filterNonSession(rs.AllowRules, toolName)
+	rs.DenyRules = filterNonSession(rs.DenyRules, toolName)
+	rs.AskRules = filterNonSession(rs.AskRules, toolName)
+}
+
+// SessionRules returns all session-scoped rules currently active.
+func (rs *RuleSet) SessionRules() []Rule {
+	rs.mu.RLock()
+	defer rs.mu.RUnlock()
+
+	var out []Rule
+	for _, r := range rs.AllowRules {
+		if r.Session {
+			out = append(out, r)
+		}
+	}
+	for _, r := range rs.DenyRules {
+		if r.Session {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func filterNonSession(rules []Rule, toolName string) []Rule {
+	filtered := rules[:0]
+	for _, r := range rules {
+		if r.Session && r.ToolPattern == toolName {
+			continue
+		}
+		filtered = append(filtered, r)
+	}
+	return filtered
+}
+
+// ---------- Evaluate ----------
 
 // Evaluate checks a tool invocation against all rules.
 // Deny rules are checked first; if any match the result is deny.

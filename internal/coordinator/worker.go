@@ -21,6 +21,16 @@ const (
 	WorkerComplete WorkerStatus = "complete"
 )
 
+// WorkerRunFunc is the function signature for custom worker execution logic.
+// When set on a Worker, the run() goroutine calls it instead of the default
+// message-recording loop. This is how the AgentTool wires in the LLM query.
+type WorkerRunFunc func(ctx context.Context, w *Worker) error
+
+// MessageHandler is called for each message received from the inbox when
+// RunFunc is nil. It lets callers hook per-message processing (e.g. forwarding
+// to an LLM) without replacing the full run loop.
+type MessageHandler func(ctx context.Context, w *Worker, msg types.Message) error
+
 // Worker represents a single agent goroutine that processes messages
 // independently inside an optional git worktree.
 type Worker struct {
@@ -29,6 +39,10 @@ type Worker struct {
 	Status       WorkerStatus
 	Prompt       string
 	WorktreePath string
+	RunFunc      WorkerRunFunc
+	OnMessage    MessageHandler
+	Result       string
+	Err          error
 
 	mu       sync.Mutex
 	messages []types.Message
@@ -94,6 +108,11 @@ func (w *Worker) Messages() []types.Message {
 	return cp
 }
 
+// Done returns a channel that closes when the worker goroutine exits.
+func (w *Worker) Done() <-chan struct{} {
+	return w.done
+}
+
 func (w *Worker) run(ctx context.Context) {
 	defer close(w.done)
 	defer func() {
@@ -103,6 +122,19 @@ func (w *Worker) run(ctx context.Context) {
 		}
 		w.mu.Unlock()
 	}()
+
+	if w.RunFunc != nil {
+		err := w.RunFunc(ctx, w)
+		w.mu.Lock()
+		w.Err = err
+		if err != nil {
+			w.Status = WorkerFailed
+		} else {
+			w.Status = WorkerComplete
+		}
+		w.mu.Unlock()
+		return
+	}
 
 	for {
 		select {
@@ -114,9 +146,18 @@ func (w *Worker) run(ctx context.Context) {
 			}
 			w.mu.Lock()
 			w.messages = append(w.messages, msg)
+			handler := w.OnMessage
 			w.mu.Unlock()
-			// The actual LLM query loop will be wired in by the caller
-			// via a handler func; for now we record messages.
+
+			if handler != nil {
+				if err := handler(ctx, w, msg); err != nil {
+					w.mu.Lock()
+					w.Err = err
+					w.Status = WorkerFailed
+					w.mu.Unlock()
+					return
+				}
+			}
 		}
 	}
 }
@@ -137,13 +178,15 @@ func NewWorkerPool() *WorkerPool {
 }
 
 // SpawnWorker creates a new worker, registers it, and starts its goroutine.
-func (p *WorkerPool) SpawnWorker(ctx context.Context, name, prompt string) (*Worker, error) {
+// If runFn is non-nil it replaces the default message-recording loop.
+func (p *WorkerPool) SpawnWorker(ctx context.Context, name, prompt string, runFn WorkerRunFunc) (*Worker, error) {
 	id, err := generateAgentID(name)
 	if err != nil {
 		return nil, fmt.Errorf("generate agent id: %w", err)
 	}
 
 	w := NewWorker(id, name, prompt)
+	w.RunFunc = runFn
 
 	p.mu.Lock()
 	p.workers[id] = w

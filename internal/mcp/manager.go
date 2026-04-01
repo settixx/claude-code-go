@@ -11,16 +11,24 @@ import (
 // Manager manages multiple MCP server connections and aggregates their tools
 // and resources.
 type Manager struct {
-	mu      sync.RWMutex
-	clients map[string]*Client
-	configs map[string]types.McpServerConfig
+	mu           sync.RWMutex
+	clients      map[string]*Client
+	configs      map[string]types.McpServerConfig
+	instructions map[string]string
+}
+
+// ServerInstruction pairs a server name with its instruction text.
+type ServerInstruction struct {
+	ServerName   string
+	Instructions string
 }
 
 // NewManager creates an empty MCP server manager.
 func NewManager() *Manager {
 	return &Manager{
-		clients: make(map[string]*Client),
-		configs: make(map[string]types.McpServerConfig),
+		clients:      make(map[string]*Client),
+		configs:      make(map[string]types.McpServerConfig),
+		instructions: make(map[string]string),
 	}
 }
 
@@ -146,6 +154,54 @@ func (m *Manager) Connections() []types.MCPServerConnection {
 		conns = append(conns, types.MCPServerConnection{Name: name, Status: status})
 	}
 	return conns
+}
+
+// RefreshTools re-fetches tools from all connected servers, updating internal
+// state. Use this after a server signals that its tool list has changed.
+func (m *Manager) RefreshTools(ctx context.Context) error {
+	m.mu.RLock()
+	snapshot := make([]*Client, 0, len(m.clients))
+	for _, c := range m.clients {
+		snapshot = append(snapshot, c)
+	}
+	m.mu.RUnlock()
+
+	var errs []error
+	for _, c := range snapshot {
+		if _, err := c.ListTools(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("refresh tools for %q: %w", c.Name(), err))
+		}
+	}
+	return joinErrors(errs)
+}
+
+// SetServerInstructions stores instruction text for the named server.
+func (m *Manager) SetServerInstructions(serverName, instructions string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.instructions[serverName] = instructions
+}
+
+// GetServerInstructions returns the instruction text for the named server.
+func (m *Manager) GetServerInstructions(serverName string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.instructions[serverName]
+}
+
+// AllInstructions returns instruction pairs for every server that has them.
+func (m *Manager) AllInstructions() []ServerInstruction {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	out := make([]ServerInstruction, 0, len(m.instructions))
+	for name, text := range m.instructions {
+		if text == "" {
+			continue
+		}
+		out = append(out, ServerInstruction{ServerName: name, Instructions: text})
+	}
+	return out
 }
 
 func joinErrors(errs []error) error {

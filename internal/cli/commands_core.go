@@ -133,8 +133,9 @@ func cmdClear(_ string, _ *CommandContext) error {
 	return nil
 }
 
-func cmdCompact(_ string, _ *CommandContext) error {
-	fmt.Fprintln(os.Stdout, tui.Blue("ℹ Conversation compaction not yet implemented."))
+func cmdCompact(_ string, ctx *CommandContext) error {
+	fmt.Fprintf(os.Stdout, "Session has %d messages.\n", ctx.MessageCount)
+	fmt.Fprintln(os.Stdout, "Compaction will be available when the context engine is connected.")
 	return nil
 }
 

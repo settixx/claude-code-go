@@ -60,7 +60,11 @@ func (c *Client) Connect(ctx context.Context) error {
 
 func (c *Client) buildTransport(ctx context.Context) (Transport, error) {
 	if c.cfg.URL != "" {
-		return NewSSETransport(c.cfg.URL), nil
+		st := NewSSETransport(c.cfg.URL)
+		if err := st.Start(ctx); err != nil {
+			return nil, fmt.Errorf("SSE start: %w", err)
+		}
+		return st, nil
 	}
 	env := buildEnv(c.cfg.Env)
 	st := NewStdioTransport(c.cfg.Command, c.cfg.Args, env)

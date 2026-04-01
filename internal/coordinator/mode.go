@@ -119,3 +119,27 @@ const promptConstraints = `## Constraints
 - If a worker fails, decide whether to retry, reassign, or skip.
 - Always verify implementation before reporting success.
 `
+
+// BuildCoordinatorSystemPrompt wraps a base prompt (multiple sections) with
+// multi-agent coordination instructions and optional team status context.
+// This is used when the coordinator itself is the LLM actor.
+func BuildCoordinatorSystemPrompt(baseSections []string, teamInfo string) string {
+	var b strings.Builder
+
+	b.WriteString(GetCoordinatorSystemPrompt())
+	b.WriteString("\n\n")
+
+	if len(baseSections) > 0 {
+		b.WriteString("## Base Context\n\n")
+		b.WriteString(strings.Join(baseSections, "\n\n"))
+		b.WriteString("\n\n")
+	}
+
+	if teamInfo != "" {
+		b.WriteString("## Active Teams\n\n")
+		b.WriteString(teamInfo)
+		b.WriteString("\n")
+	}
+
+	return b.String()
+}

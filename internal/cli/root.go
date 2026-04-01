@@ -121,7 +121,6 @@ func runInteractive(ctx context.Context, flags CLIFlags) error {
 
 	app := tui.NewApp(tui.AppConfig{
 		WelcomeText: welcomeText,
-		Prompt:      tui.Cyan("> "),
 		OnQuery:     queryHandler,
 	})
 

@@ -18,24 +18,13 @@ const (
 	maxResultChars   = 100_000
 )
 
-// dangerousPatterns are command prefixes/fragments that are blocked outright.
-var dangerousPatterns = []string{
-	"rm -rf /",
-	"rm -rf /*",
-	"mkfs.",
-	"dd if=/dev/zero",
-	"dd if=/dev/random",
-	":(){:|:&};:",
-	"> /dev/sda",
-	"chmod -R 777 /",
-}
-
-// Tool executes shell commands.
+// Tool executes shell commands with security validation.
 type Tool struct {
 	toolutil.BaseTool
+	readOnlyMode bool
 }
 
-// New creates a ready-to-use BashTool.
+// New creates a ready-to-use BashTool in normal mode.
 func New() *Tool {
 	return &Tool{
 		BaseTool: toolutil.BaseTool{
@@ -48,6 +37,14 @@ func New() *Tool {
 			ConcurrencySafe: false,
 		},
 	}
+}
+
+// NewReadOnly creates a BashTool that only allows read-only commands.
+func NewReadOnly() *Tool {
+	t := New()
+	t.readOnlyMode = true
+	t.ReadOnly = true
+	return t
 }
 
 // Description returns a human-readable description for the model.
@@ -78,7 +75,8 @@ func (t *Tool) InputSchema() types.ToolInputSchema {
 // IsDestructive inspects the command to decide whether it looks destructive.
 func (t *Tool) IsDestructive(input map[string]interface{}) bool {
 	cmd := toolutil.OptionalString(input, "command", "")
-	return isDangerous(cmd)
+	result := ValidateCommand(cmd)
+	return result.Behavior == SecurityDeny
 }
 
 // Call executes the shell command and returns combined stdout+stderr.
@@ -88,8 +86,8 @@ func (t *Tool) Call(ctx context.Context, input map[string]interface{}) (*types.T
 		return nil, err
 	}
 
-	if isDangerous(command) {
-		return nil, fmt.Errorf("command blocked for safety: %q", command)
+	if reject := t.checkSecurity(command); reject != nil {
+		return nil, reject
 	}
 
 	timeoutMs := toolutil.OptionalInt(input, "timeout", defaultTimeoutMs)
@@ -111,6 +109,7 @@ func (t *Tool) Call(ctx context.Context, input map[string]interface{}) (*types.T
 
 	if runErr != nil {
 		exitCode := extractExitCode(runErr)
+		output = annotateWithSemantics(command, exitCode, stdout.String(), stderr.String(), output)
 		result := fmt.Sprintf("Exit code: %d\n%s", exitCode, output)
 		return &types.ToolResult{Data: result}, nil
 	}
@@ -118,14 +117,36 @@ func (t *Tool) Call(ctx context.Context, input map[string]interface{}) (*types.T
 	return &types.ToolResult{Data: output}, nil
 }
 
-func isDangerous(command string) bool {
-	lower := strings.ToLower(strings.TrimSpace(command))
-	for _, pat := range dangerousPatterns {
-		if strings.Contains(lower, pat) {
-			return true
+// checkSecurity runs the full validator chain and, in read-only mode,
+// the read-only allow list. Returns an error if the command is blocked.
+func (t *Tool) checkSecurity(command string) error {
+	sec := ValidateCommand(command)
+	if sec.Behavior == SecurityDeny {
+		return fmt.Errorf("command blocked for safety: %s", sec.Message)
+	}
+
+	if t.readOnlyMode {
+		ro := ValidateReadOnly(command)
+		if ro.Behavior != SecurityAllow {
+			return fmt.Errorf("command blocked in read-only mode: %s", ro.Message)
 		}
 	}
-	return false
+
+	return nil
+}
+
+// annotateWithSemantics adds context for commands whose non-zero exit codes
+// have special meaning (e.g., grep returns 1 for "no match").
+func annotateWithSemantics(command string, exitCode int, stdout, stderr, output string) string {
+	semantic := GetCommandSemantic(command)
+	if semantic == nil {
+		return output
+	}
+	isErr, msg := semantic(exitCode, stdout, stderr)
+	if isErr {
+		return output
+	}
+	return output + "\n[note: " + msg + "]"
 }
 
 func buildOutput(stdout, stderr string) string {

@@ -1,7 +1,9 @@
 package coordinator
 
 import (
+	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/settixx/claude-code-go/internal/types"
@@ -12,6 +14,8 @@ type Team struct {
 	Name    string
 	Leader  types.AgentId
 	Members []types.AgentId
+
+	pool *WorkerPool
 }
 
 // TeamManager tracks named teams and provides CRUD operations.
@@ -45,6 +49,7 @@ func (tm *TeamManager) Create(name string, members []types.AgentId) (*Team, erro
 		Name:    name,
 		Leader:  members[0],
 		Members: members,
+		pool:    tm.pool,
 	}
 	tm.teams[name] = t
 	return t, nil
@@ -101,4 +106,87 @@ func (tm *TeamManager) ShutdownTeam(name string) error {
 		}
 	}
 	return firstErr
+}
+
+// Start spawns all team members as LLM-backed agents via the orchestrator.
+// Members must already be registered in the pool (typically by Orchestrator.SpawnTeam).
+func (t *Team) Start(ctx context.Context, orch *Orchestrator) error {
+	for _, id := range t.Members {
+		if _, ok := orch.Pool.Get(id); !ok {
+			return fmt.Errorf("team %q: member %s not found in pool", t.Name, id)
+		}
+	}
+	return nil
+}
+
+// WaitAll blocks until every team member completes. Returns the first error.
+func (t *Team) WaitAll() error {
+	if t.pool == nil {
+		return fmt.Errorf("team %q: no pool reference", t.Name)
+	}
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var firstErr error
+
+	for _, id := range t.Members {
+		w, ok := t.pool.Get(id)
+		if !ok {
+			continue
+		}
+		wg.Add(1)
+		go func(worker *Worker) {
+			defer wg.Done()
+			<-worker.Done()
+			worker.mu.Lock()
+			err := worker.Err
+			worker.mu.Unlock()
+			if err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				mu.Unlock()
+			}
+		}(w)
+	}
+
+	wg.Wait()
+	return firstErr
+}
+
+// CollectResults aggregates the result text from all team members.
+// Returns a map of worker-name → result and a formatted summary string.
+func (t *Team) CollectResults() (map[string]string, string) {
+	if t.pool == nil {
+		return nil, ""
+	}
+
+	results := make(map[string]string, len(t.Members))
+	var summary strings.Builder
+	summary.WriteString(fmt.Sprintf("## Team %q Results\n\n", t.Name))
+
+	for _, id := range t.Members {
+		w, ok := t.pool.Get(id)
+		if !ok {
+			continue
+		}
+		w.mu.Lock()
+		name := w.Name
+		result := w.Result
+		status := w.Status
+		w.mu.Unlock()
+
+		results[name] = result
+
+		summary.WriteString(fmt.Sprintf("### %s [%s]\n", name, status))
+		if result != "" {
+			summary.WriteString(result)
+		} else {
+			summary.WriteString("(no output)")
+		}
+		summary.WriteString("\n\n")
+	}
+
+	return results, summary.String()
 }

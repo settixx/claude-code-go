@@ -1,12 +1,28 @@
-# Ti Code
+<div align="center">
 
-**An AI coding agent that lives in your terminal. Single binary. Zero dependencies. Built with Go.**
+<br>
 
-[![Go 1.23+](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Status: WIP](https://img.shields.io/badge/Status-WIP-orange)]()
+```
+  ████████╗██╗     ██████╗  ██████╗ ██████╗ ███████╗
+  ╚══██╔══╝██║    ██╔════╝ ██╔═══██╗██╔══██╗██╔════╝
+     ██║   ██║    ██║      ██║   ██║██║  ██║█████╗
+     ██║   ██║    ██║      ██║   ██║██║  ██║██╔══╝
+     ██║   ██║    ╚██████╗ ╚██████╔╝██████╔╝███████╗
+     ╚═╝   ╚═╝     ╚═════╝  ╚═════╝ ╚═════╝ ╚══════╝
+```
+
+**An agentic coding assistant that lives in your terminal.**\
+**Single binary. Zero dependencies. Built with Go.**
+
+[![Go 1.23+](https://img.shields.io/badge/Go-1.23+-00ADD8?style=flat-square&logo=go&logoColor=white)](https://go.dev/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](LICENSE)
+[![Status: WIP](https://img.shields.io/badge/Status-Active_Development-orange?style=flat-square)]()
+
+[Quick Start](#quick-start) · [Features](#features) · [Usage](#usage) · [Architecture](#architecture) · [Contributing](#contributing)
 
 **English** | [简体中文](./README.zh-CN.md)
+
+</div>
 
 ---
 
@@ -14,22 +30,19 @@ Ti Code is a terminal-native AI coding agent. It talks to LLMs, reads and writes
 
 The TUI is built on [Bubble Tea v2](https://github.com/charmbracelet/bubbletea) and the [Charm](https://charm.sh/) ecosystem. If you've used Claude Code or Gemini CLI, the workflow will feel familiar.
 
-> **Note** — This project is under active development. Contributions and feedback are welcome.
+> [!NOTE]
+> This project is under active development. Contributions and feedback are welcome.
 
-## Highlights
+## Why Go?
 
-- **Single binary** — `go build` → ship. No Node.js, no `node_modules`, no runtime.
-- **Fast startup** — native Go binary, cold start in single-digit milliseconds.
-- **15 built-in tools** — file read/write/edit, bash, glob, grep, web fetch/search, notebook, todo, config, and more.
-- **Multi-model** — Anthropic Claude (default), with model alias shortcuts (`opus`, `sonnet`, `haiku`).
-- **Streaming** — real-time token streaming with thinking/extended thinking support.
-- **MCP protocol** — built-in MCP client/server for tool extensibility.
-- **Session persistence** — JSON-based session storage with resume support.
-- **Permission system** — configurable permission modes with write-tool classification.
-- **Multi-agent coordinator** — worker pool, team management, worktree isolation.
-- **Buddy system** — virtual companion with mood states and sprites (duck, cat, ghost, robot, bear).
-- **Cost tracking** — per-request and cumulative token/cost accounting.
-- **Slash commands** — `/help`, `/model`, `/status`, `/cost`, `/session`, `/config`, and more.
+| Pain point | How Ti Code fixes it |
+|---|---|
+| Node.js + `node_modules` (164 MB) | `go build` → **single binary**, done |
+| Cold start 150 ms+ | Native binary, single-digit ms startup |
+| Complex distribution | Cross-compile with `GOOS` / `GOARCH` |
+| Concurrency bolted on | Goroutines + channels are first-class |
+
+This is not a port. The architecture is redesigned around Go idioms — interfaces, composition, and the MVU pattern.
 
 ## Quick Start
 
@@ -48,6 +61,51 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 
 That's it. No `npm install`, no config files required.
 
+## Features
+
+<table>
+<tr>
+<td>
+
+**Core**
+- 25+ built-in tools (file ops, bash, grep, web, agent, MCP, ...)
+- Real-time token streaming with thinking support
+- Multi-model support with alias shortcuts
+- Permission system with security validator chain
+
+</td>
+<td>
+
+**Agent**
+- Multi-agent coordinator with worker pool & orchestrator
+- 5 built-in subagent types (explore, plan, code-reviewer, shell, refactor)
+- Task management (create, list, stop, output)
+- Team-based agent coordination
+
+</td>
+</tr>
+<tr>
+<td>
+
+**Skills & MCP**
+- Skills engine (bundled + user + project skills)
+- 6 bundled skills (commit, debug, review, simplify, verify, remember)
+- MCP protocol with SSE transport & OAuth
+- MCP prompts, resources, and tool discovery
+
+</td>
+<td>
+
+**DX**
+- 15+ slash commands (`/commit`, `/review`, `/export`, `/doctor`, ...)
+- Plan mode for read-only exploration
+- Context compaction with token-aware budget
+- Session persistence, resume & export
+
+</td>
+</tr>
+</table>
+
 ## Usage
 
 ```bash
@@ -59,19 +117,23 @@ cat file.go | ticode -p                   # Pipe stdin
 ticode --version                          # Version info
 ```
 
-### Flags
+<details>
+<summary><b>All Flags</b></summary>
 
 | Flag | Short | Description |
 |---|---|---|
 | `--print` | `-p` | Non-interactive print mode |
-| `--model` | `-m` | Model selection (e.g. `opus`, `sonnet`, `haiku`) |
+| `--model` | `-m` | Model selection (`opus`, `sonnet`, `haiku`, or full ID) |
 | `--resume` | `-r` | Resume a session by ID |
 | `--verbose` | `-v` | Enable verbose output |
-| `--permission-mode` | | Set permission mode (`default`) |
+| `--permission-mode` | | Set permission mode |
 | `--agent` | | Select agent |
 | `--debug` | | Enable debug output |
 
-### Slash Commands
+</details>
+
+<details>
+<summary><b>Slash Commands</b></summary>
 
 | Command | Description |
 |---|---|
@@ -81,64 +143,140 @@ ticode --version                          # Version info
 | `/cost` | Display token usage and cost |
 | `/config` | View or modify configuration |
 | `/session` | Session management |
+| `/commit` | Generate commit message from staged changes |
+| `/diff` | Show git diff summary |
+| `/review` | Request a code review of recent changes |
+| `/doctor` | Run environment diagnostics |
+| `/resume` | List and resume previous sessions |
+| `/export` | Export conversation to file |
+| `/memory` | Show or edit memory files |
 | `/exit` | Exit the REPL |
+
+</details>
+
+## Built-in Tools
+
+<details>
+<summary><b>Tier 1 — Core</b> (always loaded)</summary>
+
+| Tool | What it does |
+|---|---|
+| **Bash** | Execute shell commands with security validator chain |
+| **FileRead** | Read file contents |
+| **FileWrite** | Write files |
+| **FileEdit** | Patch files with search/replace |
+| **Glob** | Find files by pattern |
+| **Grep** | Search file contents with regex |
+
+</details>
+
+<details>
+<summary><b>Tier 2 — Extended</b></summary>
+
+| Tool | What it does |
+|---|---|
+| **WebSearch** | Search the web |
+| **WebFetch** | Fetch URL content |
+| **Notebook** | Edit Jupyter notebooks |
+| **Config** | View/modify configuration |
+| **AskUser** | Prompt user for input |
+| **Brief** | Summarize content |
+| **ToolSearch** | Discover available tools |
+| **LSP** | Language server protocol integration |
+
+</details>
+
+<details>
+<summary><b>Tier 3 — Agent & MCP</b></summary>
+
+| Tool | What it does |
+|---|---|
+| **Agent** | Spawn subagents (explore, plan, code-reviewer, shell, refactor) |
+| **SendMessage** | Send follow-up messages to running agents |
+| **TaskCreate** | Create background tasks |
+| **TaskList** | List active tasks |
+| **TaskOutput** | Read task output |
+| **TaskStop** | Stop a running task |
+| **TaskUpdate** | Update task status |
+| **TeamCreate** | Create multi-agent teams |
+| **TeamDelete** | Delete agent teams |
+| **Worktree** | Manage git worktrees for isolated agent work |
+| **EnterPlanMode** | Switch to read-only plan mode |
+| **ExitPlanMode** | Return to normal mode |
+| **MCPTool** | Execute MCP server tools |
+| **ListMCPResources** | List available MCP resources |
+| **ReadMCPResource** | Read a specific MCP resource |
+
+</details>
+
+## Subagent Types
+
+| Agent | Model | Purpose |
+|---|---|---|
+| `explore` | fast | Quick codebase exploration — find files, search patterns |
+| `plan` | default | Design implementation approaches before coding |
+| `code-reviewer` | default | Analyze code quality and identify issues |
+| `shell` | fast | Run terminal commands and return results |
+| `refactor` | default | Restructure code for clarity and performance |
+
+## Skills Engine
+
+Ti Code includes a skill system that extends agent capabilities with specialized knowledge and workflows.
+
+| Skill | What it does |
+|---|---|
+| `commit` | Generate well-formed git commits |
+| `debug` | Systematic debugging workflow |
+| `review` | Thorough code review checklist |
+| `simplify` | Reduce code complexity |
+| `verify` | Validate changes against requirements |
+| `remember` | Persist context across sessions |
+
+Skills are loaded from three sources: **bundled** (shipped with the binary), **user** (`~/.ticode/skills/`), and **project** (`.ticode/skills/` in repo root).
 
 ## Architecture
 
 ```
-cmd/ticode/          CLI entry point
+cmd/ticode/             Entry point
 internal/
-├── api/             LLM client, streaming, models, cost tracking, retry
-├── bridge/          Bridge protocol for IDE/headless integration
-├── buddy/           Virtual companion system (sprites, mood, observer)
-├── cli/             Flag parsing, REPL loop, slash command registry
-├── config/          Paths, CLAUDE.md parsing, config loading
-├── coordinator/     Multi-agent: worker pool, teams, worktrees, mailbox
-├── errors/          Structured error types
-├── interfaces/      Core interface definitions
-├── mcp/             MCP protocol client/server, transport, config
-├── permissions/     Permission checker, rules, classifier
-├── query/           Query engine, agent loop, budget, history
-├── state/           Application state store
-├── storage/         Session persistence (file-based)
-├── tools/           15 built-in tools (bash, file*, glob, grep, web*, ...)
-├── tui/             Bubble Tea v2 app, input, renderer, themes, keymap
-├── types/           Shared types (message, config, tool, query, IDs)
-└── version/         Build version injection
+├── api/                LLM client · streaming · models · cost · retry
+├── bridge/             IDE / headless integration protocol
+├── buddy/              Virtual companion (sprites · mood · observer)
+├── cli/                Flags · REPL · slash commands (core + dev + session)
+├── config/             Paths · CLAUDE.md · config loading
+├── coordinator/        Multi-agent: orchestrator · pool · teams · worktrees
+├── errors/             Structured error types
+├── interfaces/         Core interface definitions
+├── mcp/                MCP client · SSE transport · OAuth · prompts · tools
+├── permissions/        Checker · rules · classifier · security chain
+├── query/              Engine · compaction · token budget · system prompt
+├── skills/             Skill registry · loader · discovery · skill-as-tool
+├── state/              Application state store
+├── storage/            Session persistence (file-based JSON)
+├── tools/
+│   ├── agent/          Subagent spawner · runner · definitions
+│   ├── bash/           Bash tool · security · readonly · quoting · semantics
+│   ├── tasktool/       Task CRUD (create / get / list / stop / output / update)
+│   ├── teamtool/       Team create / delete
+│   ├── planmode/       Enter / exit plan mode
+│   ├── worktree/       Git worktree management
+│   ├── mcptool/        MCP tool execution
+│   ├── lsp/            Language server protocol tool
+│   └── ...             14 more built-in tools
+├── tui/                Bubble Tea v2 · model · input · viewport · permissions
+├── types/              Shared types (message · config · tool · IDs)
+└── version/            Build version injection
+test/
+├── bench_test.go       Performance benchmarks
+├── build_test.go       Build validation
+└── golden_test.go      Golden file / snapshot tests
 ```
-
-## Built-in Tools
-
-### Core (Tier 1)
-
-| Tool | Description |
-|---|---|
-| `Bash` | Execute shell commands |
-| `FileRead` | Read file contents |
-| `FileWrite` | Write files |
-| `FileEdit` | Patch files with search/replace |
-| `Glob` | Find files by pattern |
-| `Grep` | Search file contents with regex |
-
-### Extended (Tier 2)
-
-| Tool | Description |
-|---|---|
-| `WebSearch` | Search the web |
-| `WebFetch` | Fetch URL content |
-| `Notebook` | Edit Jupyter notebooks |
-| `Todo` | Task management |
-| `Config` | View/modify configuration |
-| `Sleep` | Delay execution |
-| `AskUser` | Prompt user for input |
-| `Brief` | Summarize content |
-| `ToolSearch` | Discover available tools |
 
 ## Tech Stack
 
 | Component | Library |
 |---|---|
-| TUI framework | [Bubble Tea v2](https://github.com/charmbracelet/bubbletea) |
+| TUI | [Bubble Tea v2](https://github.com/charmbracelet/bubbletea) |
 | Styling | [Lip Gloss](https://github.com/charmbracelet/lipgloss) |
 | Widgets | [Bubbles](https://github.com/charmbracelet/bubbles) |
 | Forms | [Huh](https://github.com/charmbracelet/huh) |
@@ -149,66 +287,30 @@ internal/
 ## Development
 
 ```bash
-make build                 # Build binary to ./bin/ticode
-make run                   # Build and run
-make test                  # Run tests
-make lint                  # golangci-lint
-make build-all             # Cross-compile (darwin/linux/windows × amd64/arm64)
-make release               # goreleaser release
-make clean                 # Remove build artifacts
-```
-
-### Cross-compilation
-
-The project uses GoReleaser for releases and includes a `build-all` make target:
-
-```bash
-# Manual cross-compile
-GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o ticode-linux ./cmd/ticode
+make build          # Build → ./bin/ticode
+make run            # Build and run
+make test           # Run tests
+make lint           # golangci-lint
+make build-all      # Cross-compile (darwin/linux/windows × amd64/arm64)
+make release        # goreleaser
+make clean          # Remove artifacts
 ```
 
 ### Conventions
 
-- Max 3 levels of nesting — extract early, return early
+- Max **3 levels** of nesting — extract early, return early
 - One loop does one thing — extract if body exceeds 10 lines
 - Interfaces define behavior, structs implement it
 - Table-driven tests: `[]struct{ name, input, want }`
 
 ## Roadmap
 
-**Phase 1 — Foundation** `in progress`
-
-- [x] CLI skeleton with flag parsing
-- [x] Bubble Tea v2 REPL (input + streaming output)
-- [x] Claude API client with streaming
-- [x] Core tools: bash, file read/write/edit, glob, grep
-- [x] Extended tools: web search/fetch, notebook, todo, config
-- [x] Slash command system
-- [x] Permission checker
-- [x] Session persistence
-- [x] Cost tracking
-
-**Phase 2 — Agent**
-
-- [x] Multi-agent coordinator (worker pool, teams)
-- [x] Worktree isolation for parallel agents
-- [x] MCP client/server protocol
-- [x] Bridge protocol for IDE integration
-- [ ] Agent loop refinement (plan → act → observe)
-- [ ] Glamour markdown rendering in REPL
-
-**Phase 3 — Protocol**
-
-- [ ] LSP integration
-- [ ] Git-aware context
-- [ ] Memory system (CLAUDE.md integration)
-
-**Phase 4 — Polish**
-
-- [ ] Vim keybindings
-- [ ] Custom themes
-- [ ] `brew install ticode` / `scoop install ticode`
-- [ ] Test coverage > 80%
+| Phase | Focus | Status |
+|---|---|---|
+| **1 — Foundation** | CLI, TUI, API client, core tools, permissions, sessions, cost tracking | ✅ Done |
+| **2 — Agent** | Multi-agent coordinator, skills engine, agent tools, task management, MCP SSE/OAuth, bash security, context compaction | 🚧 In Progress |
+| **3 — Protocol** | LSP integration, git-aware context, memory system | 📋 Planned |
+| **4 — Polish** | Vim bindings, themes, `brew install`, test coverage > 80% | 📋 Planned |
 
 ## Contributing
 
@@ -216,8 +318,7 @@ Contributions welcome. Fork, branch, test, lint, PR.
 
 ```bash
 git checkout -b feature/your-thing
-make test
-make lint
+make test && make lint
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
@@ -232,3 +333,11 @@ If you believe any content in this repository raises a concern, please [open an 
 ## License
 
 [MIT](LICENSE)
+
+---
+
+<div align="center">
+
+Built with Go and the [Charm](https://charm.sh/) ecosystem.
+
+</div>

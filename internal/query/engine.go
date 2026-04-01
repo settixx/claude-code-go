@@ -3,6 +3,7 @@ package query
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/settixx/claude-code-go/internal/interfaces"
@@ -138,14 +139,21 @@ func (e *Engine) resolveSystemPrompt() string {
 	if e.cfg.SystemPrompt != "" {
 		return e.cfg.SystemPrompt
 	}
-	var tools []types.Tool
-	if e.cfg.ToolExecutor != nil {
-		tools = e.cfg.ToolExecutor.All()
-	}
-	spCfg := DefaultSystemPromptConfig(tools, e.cfg.CWD)
+	spCfg := DefaultSystemPromptConfig(e.cfg.CWD, e.cfg.Model, "")
 	spCfg.CustomPrompt = e.cfg.CustomPrompt
 	spCfg.AppendPrompt = e.cfg.AppendPrompt
-	return BuildSystemPrompt(spCfg)
+
+	if e.cfg.ToolExecutor != nil {
+		enabled := make(map[string]bool)
+		for _, t := range e.cfg.ToolExecutor.All() {
+			if t.IsEnabled() {
+				enabled[t.Name()] = true
+			}
+		}
+		spCfg.EnabledTools = enabled
+	}
+
+	return strings.Join(BuildSystemPrompt(spCfg), "\n\n")
 }
 
 func (e *Engine) buildQueryConfig(systemPrompt string) types.QueryConfig {

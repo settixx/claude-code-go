@@ -3,13 +3,10 @@ package tui
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
-	"os/signal"
-	"strings"
-	"syscall"
 
-	"github.com/settixx/claude-code-go/internal/interfaces"
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/settixx/claude-code-go/internal/types"
 )
 
@@ -20,209 +17,113 @@ type QueryFunc func(ctx context.Context, input string, events chan<- types.Strea
 
 // AppConfig holds dependencies for the TUI application.
 type AppConfig struct {
-	// Renderer outputs messages and spinner to the terminal.
-	Renderer interfaces.Renderer
 	// OnQuery is called for each user input to produce a response.
 	OnQuery QueryFunc
 	// WelcomeText is displayed once at startup. Empty string skips the banner.
 	WelcomeText string
-	// Prompt is the input prompt string. Defaults to "> " if empty.
-	Prompt string
+	// Prompt mode: "normal" or "plan".
+	PromptMode string
 }
 
-// App is the main TUI application that runs a REPL loop.
+// App is the main TUI application backed by Bubble Tea.
 type App struct {
-	renderer interfaces.Renderer
-	input    *InputReader
-	onQuery  QueryFunc
-	welcome  string
-	prompt   string
+	cfg     AppConfig
+	program *tea.Program
 }
 
 // NewApp creates a TUI application from the given config.
 func NewApp(cfg AppConfig) *App {
-	prompt := cfg.Prompt
-	if prompt == "" {
-		prompt = Cyan("> ")
-	}
-	renderer := cfg.Renderer
-	if renderer == nil {
-		renderer = NewTermRenderer()
-	}
-	return &App{
-		renderer: renderer,
-		input:    NewInputReader(),
-		onQuery:  cfg.OnQuery,
-		welcome:  cfg.WelcomeText,
-		prompt:   prompt,
-	}
+	return &App{cfg: cfg}
 }
 
-// Run starts the interactive REPL loop. It blocks until the user exits
-// (via /exit, Ctrl+D, or Ctrl+C) or the context is cancelled.
+// Run starts the interactive Bubble Tea TUI. It blocks until the user exits.
 func (a *App) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	a.setupSignalHandler(cancel)
-	a.printWelcome()
+	model := NewAppModel(a.cfg.WelcomeText, func(input string) {
+		go a.processQuery(ctx, input)
+	})
 
-	for {
-		if err := ctx.Err(); err != nil {
-			return nil
-		}
+	if a.cfg.PromptMode != "" {
+		model.textInput.SetMode(a.cfg.PromptMode)
+	}
 
-		line, err := a.input.ReadLine(a.prompt)
-		if err == io.EOF {
-			fmt.Fprintln(os.Stdout)
-			fmt.Fprintln(os.Stdout, Dim("Goodbye!"))
-			return nil
-		}
-		if err != nil {
-			a.renderer.RenderError(err)
-			continue
-		}
+	a.program = tea.NewProgram(model, tea.WithAltScreen())
 
-		if line == "" {
-			continue
-		}
+	if _, err := a.program.Run(); err != nil {
+		return fmt.Errorf("tui: %w", err)
+	}
+	return nil
+}
 
-		if handled := a.handleCommand(line); handled {
-			if isExitCommand(line) {
-				return nil
-			}
-			continue
-		}
-
-		a.processQuery(ctx, line)
+// Send injects a Bubble Tea message into the running program from the outside.
+// Safe to call from any goroutine.
+func (a *App) Send(msg tea.Msg) {
+	if a.program != nil {
+		a.program.Send(msg)
 	}
 }
 
-func (a *App) setupSignalHandler(cancel context.CancelFunc) {
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigCh
-		fmt.Fprintln(os.Stdout)
-		fmt.Fprintln(os.Stdout, Dim("Interrupted. Goodbye!"))
-		cancel()
-	}()
-}
-
-func (a *App) printWelcome() {
-	if a.welcome == "" {
-		return
-	}
-	fmt.Fprintln(os.Stdout, a.welcome)
-	fmt.Fprintln(os.Stdout, HorizontalRule())
-	fmt.Fprintln(os.Stdout)
-}
-
+// processQuery runs the OnQuery callback and bridges streaming events
+// into Bubble Tea messages via program.Send.
 func (a *App) processQuery(ctx context.Context, input string) {
-	if a.onQuery == nil {
-		a.renderer.RenderMessage(types.Message{
-			Type: types.MsgSystem,
-			Text: "No query handler configured.",
-			Level: types.LevelWarning,
-		})
+	if a.cfg.OnQuery == nil {
+		a.Send(ErrorMsg{Err: fmt.Errorf("no query handler configured")})
 		return
 	}
-
-	a.renderer.RenderSpinner("Thinking…")
 
 	events := make(chan types.StreamEvent, 64)
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- a.onQuery(ctx, input, events)
+		errCh <- a.cfg.OnQuery(ctx, input, events)
 	}()
 
 	a.consumeStream(events)
-	a.renderer.StopSpinner()
 
 	if err := <-errCh; err != nil {
-		a.renderer.RenderError(err)
+		a.Send(ErrorMsg{Err: err})
 	}
 
-	fmt.Fprintln(os.Stdout)
+	a.Send(StreamDoneMsg{})
 }
 
+// consumeStream reads API streaming events and translates them to TUI messages.
 func (a *App) consumeStream(events <-chan types.StreamEvent) {
-	firstContent := true
 	for ev := range events {
 		switch ev.Type {
 		case types.EventContentBlockStart:
-			if firstContent {
-				a.renderer.StopSpinner()
-				firstContent = false
-			}
 			if ev.ContentBlock != nil && ev.ContentBlock.Type == types.ContentToolUse {
-				fmt.Fprintln(os.Stdout, FormatToolUse(ev.ContentBlock.Name, ""))
+				a.Send(ToolCallMsg{Name: ev.ContentBlock.Name})
 			}
 
 		case types.EventContentBlockDelta:
-			if firstContent {
-				a.renderer.StopSpinner()
-				firstContent = false
-			}
 			if ev.Delta != nil && ev.Delta.Text != "" {
-				fmt.Fprint(os.Stdout, ev.Delta.Text)
+				a.Send(StreamChunkMsg{Text: ev.Delta.Text})
 			}
 
 		case types.EventContentBlockStop:
-			fmt.Fprintln(os.Stdout)
+			// block boundary — nothing extra needed
 
 		case types.EventError:
 			if ev.Error != nil {
-				fmt.Fprintln(os.Stdout, Red("Stream error: "+ev.Error.Message))
+				a.Send(ErrorMsg{Err: fmt.Errorf(ev.Error.Message)})
 			}
 
 		case types.EventMessageStop:
-			// Final event — nothing more to do.
+			// final event
 		}
 	}
 }
 
-// handleCommand processes slash-commands. Returns true if the line was a command.
-func (a *App) handleCommand(line string) bool {
-	if !strings.HasPrefix(line, "/") {
-		return false
-	}
-
-	parts := strings.Fields(line)
-	cmd := strings.ToLower(parts[0])
-
-	switch cmd {
-	case "/exit", "/quit":
-		fmt.Fprintln(os.Stdout, Dim("Goodbye!"))
-		return true
-	case "/help":
-		a.printHelp()
-		return true
-	case "/clear":
-		fmt.Fprint(os.Stdout, "\033[2J\033[H")
-		return true
-	default:
-		fmt.Fprintln(os.Stdout, Yellow("Unknown command: "+cmd+". Type /help for available commands."))
-		return true
-	}
+// SendPermissionRequest presents a permission dialog and blocks until the user responds.
+func (a *App) SendPermissionRequest(tool, input string) bool {
+	ch := make(chan bool, 1)
+	a.Send(PermissionRequestMsg{Tool: tool, Input: input, ResponseCh: ch})
+	return <-ch
 }
 
-func isExitCommand(line string) bool {
-	cmd := strings.ToLower(strings.Fields(line)[0])
-	return cmd == "/exit" || cmd == "/quit"
-}
-
-func (a *App) printHelp() {
-	help := []struct{ cmd, desc string }{
-		{"/help", "Show this help message"},
-		{"/exit", "Exit the application"},
-		{"/quit", "Exit the application"},
-		{"/clear", "Clear the screen"},
-	}
-
-	fmt.Fprintln(os.Stdout, Bold("Available commands:"))
-	for _, h := range help {
-		fmt.Fprintf(os.Stdout, "  %-12s %s\n", Cyan(h.cmd), h.desc)
-	}
-	fmt.Fprintln(os.Stdout)
+// PrintError is a convenience for writing an error outside the TUI lifecycle.
+func PrintError(err error) {
+	fmt.Fprintln(os.Stderr, Red("✗ Error: "+err.Error()))
 }

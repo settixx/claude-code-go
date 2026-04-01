@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/settixx/claude-code-go/internal/types"
 )
+
+const maxToolResultChars = 100_000
 
 // MCPToolAdapter wraps an MCPToolSchema + Client so it satisfies types.Tool.
 // The tool name is prefixed as mcp__<serverName>__<toolName>.
@@ -68,7 +71,7 @@ func (a *MCPToolAdapter) Call(ctx context.Context, input map[string]interface{})
 	if err != nil {
 		return nil, fmt.Errorf("mcp call %s: %w", a.Name(), err)
 	}
-	text := extractText(result)
+	text := truncateResult(extractText(result), a.Name())
 	if result.IsError {
 		return &types.ToolResult{Data: text}, fmt.Errorf("tool returned error: %s", text)
 	}
@@ -86,6 +89,16 @@ func extractText(result *ToolCallResult) string {
 		}
 	}
 	return strings.Join(parts, "\n")
+}
+
+const truncationSuffix = "\n[truncated — result exceeded 100K chars]"
+
+func truncateResult(text, toolName string) string {
+	if len(text) <= maxToolResultChars {
+		return text
+	}
+	log.Printf("mcp: tool %s result truncated from %d to %d chars", toolName, len(text), maxToolResultChars)
+	return text[:maxToolResultChars-len(truncationSuffix)] + truncationSuffix
 }
 
 // IsEnabled always returns true for remote MCP tools.

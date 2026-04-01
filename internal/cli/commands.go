@@ -5,6 +5,10 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/settixx/claude-code-go/internal/interfaces"
+	"github.com/settixx/claude-code-go/internal/types"
 )
 
 // CommandHandler is the function signature for slash command handlers.
@@ -37,6 +41,17 @@ type CommandContext struct {
 	TokensOut int
 	// CostUSD tracks cumulative estimated cost in USD.
 	CostUSD float64
+
+	// Storage provides access to persisted sessions.
+	Storage interfaces.SessionStorage
+	// CWD is the current working directory for file operations.
+	CWD string
+	// Messages holds the current conversation messages.
+	Messages []types.Message
+	// MessageCount is a quick count of messages (may differ from len(Messages) if not all loaded).
+	MessageCount int
+	// StartTime records when the current session began.
+	StartTime time.Time
 }
 
 // CommandRegistry holds all registered slash commands and provides lookup.
