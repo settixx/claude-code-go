@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"strings"
 )
 
@@ -93,36 +92,32 @@ func visibleLen(s string) int {
 }
 
 // StatusLineFromState builds a StatusLine from common session parameters.
-// model is the active model name, tokens is the total token count,
-// cost is the accumulated USD cost, permMode is the permission mode label,
-// and sessionID is the current session identifier.
-func StatusLineFromState(model string, tokens int, cost float64, permMode, sessionID string) *StatusLine {
-	left := buildLeftSection(model, permMode)
-	center := buildCenterSection(tokens, cost)
+func StatusLineFromState(model string, ct *CostTracker, permMode, sessionID, branch string) *StatusLine {
+	left := buildLeftSection(model, permMode, branch)
+	center := buildCenterTokens(ct)
 	right := buildRightSection(sessionID)
 	return &StatusLine{Left: left, Center: center, Right: right}
 }
 
-func buildLeftSection(model, permMode string) string {
-	parts := make([]string, 0, 2)
+func buildLeftSection(model, permMode, branch string) string {
+	parts := make([]string, 0, 3)
 	if model != "" {
 		parts = append(parts, Bold(model))
 	}
 	if permMode != "" {
 		parts = append(parts, permModeLabel(permMode))
 	}
+	if branch != "" {
+		parts = append(parts, Dim("["+branch+"]"))
+	}
 	return strings.Join(parts, " ")
 }
 
-func buildCenterSection(tokens int, cost float64) string {
-	parts := make([]string, 0, 2)
-	if tokens > 0 {
-		parts = append(parts, Dim(formatTokens(tokens)))
+func buildCenterTokens(ct *CostTracker) string {
+	if ct == nil || ct.TotalTokens() == 0 {
+		return ""
 	}
-	if cost > 0 {
-		parts = append(parts, Yellow(FormatCost(cost)))
-	}
-	return strings.Join(parts, " │ ")
+	return Dim(ct.FormatStatusSegment())
 }
 
 func buildRightSection(sessionID string) string {
@@ -146,16 +141,5 @@ func permModeLabel(mode string) string {
 		return Green("[accept-edits]")
 	default:
 		return Dim("[" + mode + "]")
-	}
-}
-
-func formatTokens(n int) string {
-	switch {
-	case n >= 1_000_000:
-		return fmt.Sprintf("%.1fM tokens", float64(n)/1_000_000)
-	case n >= 1_000:
-		return fmt.Sprintf("%.1fK tokens", float64(n)/1_000)
-	default:
-		return fmt.Sprintf("%d tokens", n)
 	}
 }

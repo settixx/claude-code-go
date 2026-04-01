@@ -36,3 +36,4 @@ go.sum
 
 # GoReleaser
 dist/
+ticode

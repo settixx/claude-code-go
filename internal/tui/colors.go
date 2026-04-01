@@ -2,12 +2,9 @@ package tui
 
 import (
 	"fmt"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
-	"syscall"
-	"unsafe"
 )
 
 // ANSI escape code constants.
@@ -74,26 +71,8 @@ func TermWidth() int {
 	return w
 }
 
-type winsize struct {
-	Row    uint16
-	Col    uint16
-	Xpixel uint16
-	Ypixel uint16
-}
-
-func termSize() (width, height int) {
-	ws := &winsize{}
-	_, _, errno := syscall.Syscall(
-		syscall.SYS_IOCTL,
-		os.Stdout.Fd(),
-		uintptr(syscall.TIOCGWINSZ),
-		uintptr(unsafe.Pointer(ws)),
-	)
-	if errno != 0 {
-		return 0, 0
-	}
-	return int(ws.Col), int(ws.Row)
-}
+// termSize is implemented in platform-specific files:
+// colors_unix.go (linux, darwin) and colors_windows.go.
 
 // Truncate shortens s to maxLen runes, appending "…" if truncated.
 func Truncate(s string, maxLen int) string {

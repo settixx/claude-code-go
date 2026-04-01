@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/settixx/claude-code-go/internal/errors"
@@ -95,12 +96,20 @@ func (p *Provider) applyEnvVars() {
 
 func (p *Provider) loadUserConfig() error {
 	path := UserSettingsPath()
-	return loadJSONFile(path, &p.user)
+	if err := loadJSONFile(path, &p.user); err != nil {
+		return err
+	}
+	localPath := strings.TrimSuffix(path, ".json") + ".local.json"
+	return loadJSONFile(localPath, &p.user)
 }
 
 func (p *Provider) loadProjectConfig() error {
 	path := ProjectSettingsPath(p.cwd)
-	return loadJSONFile(path, &p.project)
+	if err := loadJSONFile(path, &p.project); err != nil {
+		return err
+	}
+	localPath := strings.TrimSuffix(path, ".json") + ".local.json"
+	return loadJSONFile(localPath, &p.project)
 }
 
 // loadJSONFile reads a JSON file into dst. Missing files are silently

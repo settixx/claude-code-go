@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/settixx/claude-code-go/internal/types"
@@ -202,6 +203,22 @@ func (m *Manager) AllInstructions() []ServerInstruction {
 		out = append(out, ServerInstruction{ServerName: name, Instructions: text})
 	}
 	return out
+}
+
+// FormatInstructionsText builds a markdown-formatted string from all
+// server instructions, suitable for appending to a system prompt.
+func (m *Manager) FormatInstructionsText() string {
+	instructions := m.AllInstructions()
+	if len(instructions) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("# MCP Server Instructions\n\n")
+	for _, inst := range instructions {
+		fmt.Fprintf(&b, "## %s\n%s\n\n", inst.ServerName, inst.Instructions)
+	}
+	return b.String()
 }
 
 func joinErrors(errs []error) error {

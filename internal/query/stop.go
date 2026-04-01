@@ -37,8 +37,9 @@ const (
 
 // StopDecision bundles the result of ShouldStop.
 type StopDecision struct {
-	Stop   bool
-	Reason StopReason
+	Stop         bool
+	AutoContinue bool
+	Reason       StopReason
 }
 
 // ShouldStop inspects the API response and surrounding context to decide
@@ -64,7 +65,7 @@ func ShouldStop(ctx context.Context, response *types.APIMessage, budget *Budget)
 	case types.StopEndTurn:
 		return StopDecision{Stop: true, Reason: StopReasonEndTurn}
 	case types.StopMaxTokens:
-		return StopDecision{Stop: true, Reason: StopReasonMaxTokens}
+		return StopDecision{Stop: false, AutoContinue: true, Reason: StopReasonMaxTokens}
 	default:
 		return StopDecision{Stop: true, Reason: StopReasonEndTurn}
 	}

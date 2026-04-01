@@ -15,14 +15,18 @@ import (
 
 // loopConfig bundles the dependencies that runLoop needs.
 type loopConfig struct {
-	client   interfaces.LLMClient
-	executor interfaces.ToolExecutor
-	renderer interfaces.Renderer
-	budget   *Budget
-	query    types.QueryConfig
-	maxTurns int
-	hooks    []StopHook
+	client          interfaces.LLMClient
+	executor        interfaces.ToolExecutor
+	renderer        interfaces.Renderer
+	permissions     interfaces.PermissionChecker
+	budget          *Budget
+	query           types.QueryConfig
+	maxTurns        int
+	maxAutoContinue int
+	hooks           []StopHook
 }
+
+const defaultMaxAutoContinue = 5
 
 // runLoop is the core conversation loop. It sends messages to the LLM,
 // collects the response, executes any tool_use blocks, appends tool_result
@@ -31,9 +35,15 @@ type loopConfig struct {
 // Returns the final assistant APIMessage and the stop reason.
 func runLoop(ctx context.Context, cfg loopConfig, history *History) (*types.APIMessage, StopReason, error) {
 	turn := 0
+	autoContinueCount := 0
+	maxAC := cfg.maxAutoContinue
+	if maxAC <= 0 {
+		maxAC = defaultMaxAutoContinue
+	}
+
 	for {
 		if err := ctx.Err(); err != nil {
-			return nil, StopReasonContextCancel, err
+			return nil, StopReasonContextCancel, nil
 		}
 
 		if cfg.maxTurns > 0 && turn >= cfg.maxTurns {
@@ -49,6 +59,9 @@ func runLoop(ctx context.Context, cfg loopConfig, history *History) (*types.APIM
 
 		response, err := streamAndAssemble(ctx, cfg, apiMessages)
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil, StopReasonContextCancel, nil
+			}
 			return nil, StopReasonAborted, err
 		}
 
@@ -72,7 +85,19 @@ func runLoop(ctx context.Context, cfg loopConfig, history *History) (*types.APIM
 			return response, decision.Reason, nil
 		}
 
-		toolResults, err := executeToolBlocks(ctx, cfg.executor, response, cfg.renderer)
+		if decision.AutoContinue {
+			autoContinueCount++
+			if autoContinueCount > maxAC {
+				slog.Warn("max auto-continue reached", "count", autoContinueCount)
+				return response, StopReasonMaxTokens, nil
+			}
+			slog.Info("auto-continuing after max_tokens", "count", autoContinueCount)
+			history.Append(NewContinueMessage())
+			turn++
+			continue
+		}
+
+		toolResults, err := executeToolBlocks(ctx, cfg.executor, response, cfg.renderer, cfg.permissions)
 		if err != nil {
 			return response, StopReasonAborted, err
 		}
@@ -80,6 +105,7 @@ func runLoop(ctx context.Context, cfg loopConfig, history *History) (*types.APIM
 		resultMsg := NewToolResultMessage(toolResults)
 		history.Append(resultMsg)
 
+		autoContinueCount = 0
 		turn++
 	}
 }
@@ -107,6 +133,11 @@ func assembleStream(ctx context.Context, ch <-chan types.StreamEvent, renderer i
 	for {
 		select {
 		case <-ctx.Done():
+			if result != nil {
+				if partial, err := finaliseAssembly(result, blocks, lastUsage); err == nil && partial != nil {
+					return partial, nil
+				}
+			}
 			return result, ctx.Err()
 		case evt, ok := <-ch:
 			if !ok {
@@ -229,6 +260,7 @@ func executeToolBlocks(
 	executor interfaces.ToolExecutor,
 	response *types.APIMessage,
 	renderer interfaces.Renderer,
+	permChecker interfaces.PermissionChecker,
 ) ([]types.ContentBlock, error) {
 	calls := extractToolCalls(response)
 	if len(calls) == 0 {
@@ -240,7 +272,7 @@ func executeToolBlocks(
 	var results []types.ContentBlock
 
 	if len(concurrent) > 0 {
-		r, err := executeConcurrent(ctx, executor, concurrent, renderer)
+		r, err := executeConcurrent(ctx, executor, concurrent, renderer, permChecker)
 		if err != nil {
 			return results, err
 		}
@@ -248,7 +280,7 @@ func executeToolBlocks(
 	}
 
 	for _, tc := range sequential {
-		r, err := executeSingle(ctx, executor, tc, renderer)
+		r, err := executeSingle(ctx, executor, tc, renderer, permChecker)
 		if err != nil {
 			return results, err
 		}
@@ -296,6 +328,7 @@ func executeConcurrent(
 	executor interfaces.ToolExecutor,
 	calls []toolCall,
 	renderer interfaces.Renderer,
+	permChecker interfaces.PermissionChecker,
 ) ([]types.ContentBlock, error) {
 	type indexedResult struct {
 		idx   int
@@ -311,7 +344,7 @@ func executeConcurrent(
 		wg.Add(1)
 		go func(idx int, tc toolCall) {
 			defer wg.Done()
-			block, err := executeSingle(ctx, executor, tc, renderer)
+			block, err := executeSingle(ctx, executor, tc, renderer, permChecker)
 			ch <- indexedResult{idx: idx, block: block, err: err}
 		}(i, tc)
 	}
@@ -337,8 +370,19 @@ func executeSingle(
 	executor interfaces.ToolExecutor,
 	tc toolCall,
 	renderer interfaces.Renderer,
+	permChecker interfaces.PermissionChecker,
 ) (types.ContentBlock, error) {
 	slog.Debug("executing tool", "name", tc.Name, "id", tc.ID)
+
+	if permChecker != nil {
+		result := permChecker.Check(tc.Name, tc.Input)
+		if !result.Allowed {
+			return buildToolResultBlock(tc.ID, nil, &errors.PermissionError{
+				ToolName: tc.Name,
+				Reason:   result.Reason,
+			}), nil
+		}
+	}
 
 	renderer.RenderMessage(types.Message{
 		Type: types.MsgProgress,

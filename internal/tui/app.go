@@ -92,6 +92,14 @@ func (a *App) processQuery(ctx context.Context, input string) {
 func (a *App) consumeStream(events <-chan types.StreamEvent) {
 	for ev := range events {
 		switch ev.Type {
+		case types.EventMessageStart:
+			if ev.Message != nil && ev.Message.Usage != nil {
+				a.Send(TokenUsageMsg{
+					InputTokens:  ev.Message.Usage.InputTokens,
+					OutputTokens: ev.Message.Usage.OutputTokens,
+				})
+			}
+
 		case types.EventContentBlockStart:
 			if ev.ContentBlock != nil && ev.ContentBlock.Type == types.ContentToolUse {
 				a.Send(ToolCallMsg{Name: ev.ContentBlock.Name})
@@ -111,7 +119,12 @@ func (a *App) consumeStream(events <-chan types.StreamEvent) {
 			}
 
 		case types.EventMessageStop:
-			// final event
+			if ev.Usage != nil {
+				a.Send(TokenUsageMsg{
+					InputTokens:  ev.Usage.InputTokens,
+					OutputTokens: ev.Usage.OutputTokens,
+				})
+			}
 		}
 	}
 }

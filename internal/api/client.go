@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	apierrors "github.com/settixx/claude-code-go/internal/errors"
@@ -186,20 +187,39 @@ func (c *Client) resolveModel(model string) string {
 
 // apiRequest is the JSON body sent to the Messages API.
 type apiRequest struct {
-	Model         string                `json:"model"`
-	MaxTokens     int                   `json:"max_tokens"`
-	Messages      []apiMessageParam     `json:"messages"`
-	System        string                `json:"system,omitempty"`
-	Stream        bool                  `json:"stream"`
-	Temperature   *float64              `json:"temperature,omitempty"`
-	TopP          *float64              `json:"top_p,omitempty"`
-	StopSequences []string              `json:"stop_sequences,omitempty"`
-	Tools         []types.ToolDef       `json:"tools,omitempty"`
-	Metadata      *apiRequestMetadata   `json:"metadata,omitempty"`
+	Model         string              `json:"model"`
+	MaxTokens     int                 `json:"max_tokens"`
+	Messages      []apiMessageParam   `json:"messages"`
+	System        interface{}         `json:"system,omitempty"`
+	Stream        bool                `json:"stream"`
+	Temperature   *float64            `json:"temperature,omitempty"`
+	TopP          *float64            `json:"top_p,omitempty"`
+	StopSequences []string            `json:"stop_sequences,omitempty"`
+	Tools         []types.ToolDef     `json:"tools,omitempty"`
+	Metadata      *apiRequestMetadata `json:"metadata,omitempty"`
+	Thinking      *ThinkingConfig     `json:"thinking,omitempty"`
+}
+
+// ThinkingConfig controls extended thinking (chain-of-thought) for models that support it.
+type ThinkingConfig struct {
+	Type         string `json:"type"`
+	BudgetTokens int    `json:"budget_tokens"`
 }
 
 type apiRequestMetadata struct {
 	UserID string `json:"user_id,omitempty"`
+}
+
+// SystemBlock is a structured system prompt fragment with optional cache control.
+type SystemBlock struct {
+	Type         string        `json:"type"`
+	Text         string        `json:"text"`
+	CacheControl *CacheControl `json:"cache_control,omitempty"`
+}
+
+// CacheControl instructs the API to cache the associated block.
+type CacheControl struct {
+	Type string `json:"type"`
 }
 
 type apiMessageParam struct {
@@ -221,18 +241,28 @@ func (c *Client) buildRequestBody(config types.QueryConfig, messages []types.Mes
 		Model:     model,
 		MaxTokens: maxTokens,
 		Messages:  apiMsgs,
-		System:    config.SystemPrompt,
+		System:    buildSystemBlocks(config.SystemPrompt),
 		Stream:    stream,
 	}
 
-	if config.Temperature > 0 {
-		t := config.Temperature
+	caps := GetModelCapabilities(model)
+	thinkingEnabled := config.ThinkingBudget > 0 && caps.SupportsThinking
+	if thinkingEnabled {
+		req.Thinking = &ThinkingConfig{Type: "enabled", BudgetTokens: config.ThinkingBudget}
+		t := 1.0
 		req.Temperature = &t
+		req.TopP = nil
+	} else {
+		if config.Temperature > 0 {
+			t := config.Temperature
+			req.Temperature = &t
+		}
+		if config.TopP > 0 {
+			p := config.TopP
+			req.TopP = &p
+		}
 	}
-	if config.TopP > 0 {
-		p := config.TopP
-		req.TopP = &p
-	}
+
 	if len(config.StopSequences) > 0 {
 		req.StopSequences = config.StopSequences
 	}
@@ -250,18 +280,44 @@ func (c *Client) buildCountTokensBody(config types.QueryConfig, messages []types
 	payload := struct {
 		Model    string            `json:"model"`
 		Messages []apiMessageParam `json:"messages"`
-		System   string            `json:"system,omitempty"`
+		System   interface{}       `json:"system,omitempty"`
 		Tools    []types.ToolDef   `json:"tools,omitempty"`
 	}{
 		Model:    model,
 		Messages: apiMsgs,
-		System:   config.SystemPrompt,
+		System:   buildSystemBlocks(config.SystemPrompt),
 	}
 	if len(config.Tools) > 0 {
 		payload.Tools = config.Tools
 	}
 
 	return json.Marshal(payload)
+}
+
+// buildSystemBlocks splits a system prompt at the dynamic boundary marker.
+// The static part before the boundary gets cache_control for prompt caching;
+// the dynamic part after does not. If no boundary is present the plain string is returned.
+func buildSystemBlocks(systemPrompt string) interface{} {
+	if systemPrompt == "" {
+		return nil
+	}
+
+	const boundary = "SYSTEM_PROMPT_DYNAMIC_BOUNDARY"
+	idx := strings.Index(systemPrompt, boundary)
+	if idx < 0 {
+		return systemPrompt
+	}
+
+	staticPart := strings.TrimSpace(systemPrompt[:idx])
+	dynamicPart := strings.TrimSpace(systemPrompt[idx+len(boundary):])
+
+	blocks := []SystemBlock{
+		{Type: "text", Text: staticPart, CacheControl: &CacheControl{Type: "ephemeral"}},
+	}
+	if dynamicPart != "" {
+		blocks = append(blocks, SystemBlock{Type: "text", Text: dynamicPart})
+	}
+	return blocks
 }
 
 // convertMessages transforms the high-level Message slice into the
@@ -316,6 +372,10 @@ func (c *Client) doRequest(ctx context.Context, path string, body []byte) (*http
 	req.Header.Set("X-Api-Key", c.apiKey)
 	req.Header.Set("Anthropic-Version", anthropicVersion)
 	req.Header.Set("Accept", "application/json")
+
+	if bytes.Contains(body, []byte(`"thinking"`)) {
+		req.Header.Set("Anthropic-Beta", "interleaved-thinking-2025-05-14")
+	}
 
 	slog.Debug("API request", "method", "POST", "url", url)
 

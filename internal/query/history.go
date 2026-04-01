@@ -175,6 +175,31 @@ func NewToolResultMessage(results []types.ContentBlock) types.Message {
 	}
 }
 
+// NewContinueMessage builds a user-role message that prompts the model to
+// resume output after hitting the max_tokens limit.
+func NewContinueMessage() types.Message {
+	return types.Message{
+		Type:      types.MsgUser,
+		Role:      "user",
+		Timestamp: time.Now(),
+		Content: []types.ContentBlock{{
+			Type: types.ContentText,
+			Text: "Please continue from where you left off.",
+		}},
+	}
+}
+
+// NewMultiModalMessage builds a user-role message with arbitrary content
+// blocks (text, images, etc.).
+func NewMultiModalMessage(blocks []types.ContentBlock) types.Message {
+	return types.Message{
+		Type:      types.MsgUser,
+		Role:      "user",
+		Timestamp: time.Now(),
+		Content:   blocks,
+	}
+}
+
 // AssistantMessageFromAPI wraps a raw APIMessage into the conversation
 // envelope.
 func AssistantMessageFromAPI(api *types.APIMessage) types.Message {

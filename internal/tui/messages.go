@@ -39,3 +39,9 @@ type PermissionRequestMsg struct {
 
 // ErrorMsg wraps an error that occurred during an async operation.
 type ErrorMsg struct{ Err error }
+
+// TokenUsageMsg carries token usage data from a completed message exchange.
+type TokenUsageMsg struct {
+	InputTokens  int
+	OutputTokens int
+}

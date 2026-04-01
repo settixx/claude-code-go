@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -39,11 +40,18 @@ type AppModel struct {
 	permDialog *PermissionDialog
 
 	// Status bar state
-	modelName  string
-	permMode   string
-	tokens     int
-	cost       float64
-	sessionID  string
+	modelName string
+	permMode  string
+	sessionID string
+
+	// Cost/token tracking
+	costTracker CostTracker
+
+	// Git branch display
+	gitBranch *GitBranchCache
+
+	// Buddy widget
+	buddy BuddyWidget
 }
 
 // NewAppModel creates the initial Bubble Tea model.
@@ -57,6 +65,8 @@ func NewAppModel(welcome string, onSubmit func(string)) AppModel {
 		spinner:   sp,
 		welcome:   welcome,
 		onSubmit:  onSubmit,
+		gitBranch: NewGitBranchCache(30 * time.Second),
+		buddy:     NewBuddyWidget(),
 	}
 }
 
@@ -65,8 +75,13 @@ func (m *AppModel) SetStatus(model, permMode, sessionID string, tokens int, cost
 	m.modelName = model
 	m.permMode = permMode
 	m.sessionID = sessionID
-	m.tokens = tokens
-	m.cost = cost
+	m.costTracker.InputTokens = tokens
+	m.costTracker.CostUSD = cost
+}
+
+// UpdateTokens records token usage from a stream event.
+func (m *AppModel) UpdateTokens(input, output int) {
+	m.costTracker.Add(input, output)
 }
 
 // Init returns the initial command (text input blink + spinner tick).
@@ -97,6 +112,9 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case ErrorMsg:
 		return m.handleError(msg), nil
+	case TokenUsageMsg:
+		m.costTracker.Add(msg.InputTokens, msg.OutputTokens)
+		return m, nil
 	}
 
 	return m.updateChildren(msg)
@@ -114,15 +132,16 @@ func (m AppModel) View() string {
 
 	header := m.renderHeader()
 	status := m.renderStatusLine()
+	buddyView := m.buddy.View()
 	input := m.textInput.View()
-	vpView := m.viewport.View()
 
-	return lipgloss.JoinVertical(lipgloss.Left,
-		header,
-		vpView,
-		status,
-		input,
-	)
+	sections := []string{header, m.viewport.View(), status}
+	if buddyView != "" {
+		sections = append(sections, buddyView)
+	}
+	sections = append(sections, input)
+
+	return lipgloss.JoinVertical(lipgloss.Left, sections...)
 }
 
 // --- resize ---
@@ -133,8 +152,9 @@ func (m AppModel) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 
 	headerH := lipgloss.Height(m.renderHeader())
 	statusH := 1
-	inputH := 1
-	vpHeight := m.height - headerH - statusH - inputH
+	inputH := m.textInput.LineCount()
+	buddyH := m.buddy.Height()
+	vpHeight := m.height - headerH - statusH - inputH - buddyH
 	if vpHeight < 1 {
 		vpHeight = 1
 	}
@@ -149,6 +169,7 @@ func (m AppModel) handleResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	}
 
 	m.textInput.SetWidth(m.width)
+	m.buddy.SetWidth(m.width)
 	m.refreshViewport()
 	return m, nil
 }
@@ -214,10 +235,51 @@ func (m *AppModel) handleSlashCommand(line string) (handled bool, quit bool) {
 	case "/clear":
 		m.messages = nil
 		return true, false
+	case "/buddy":
+		m.handleBuddySlash(parts[1:])
+		return true, false
 	default:
 		m.appendSystemMsg("Unknown command: " + cmd + ". Type /help for available commands.")
 		return true, false
 	}
+}
+
+func (m *AppModel) handleBuddySlash(args []string) {
+	if len(args) == 0 {
+		m.buddy.Toggle()
+		if m.buddy.IsVisible() {
+			m.buddy.SetFrame(defaultBuddyFrame())
+			m.buddy.SetText("Buddy is here!")
+			m.appendSystemMsg("Buddy enabled! Use /buddy off to hide.")
+		} else {
+			m.appendSystemMsg("Buddy hidden. Use /buddy to show again.")
+		}
+		return
+	}
+
+	switch strings.ToLower(args[0]) {
+	case "on":
+		m.buddy.SetVisible(true)
+		m.buddy.SetFrame(defaultBuddyFrame())
+		m.buddy.SetText("Hello!")
+		m.appendSystemMsg("Buddy enabled!")
+	case "off":
+		m.buddy.SetVisible(false)
+		m.appendSystemMsg("Buddy hidden.")
+	case "species":
+		if len(args) < 2 {
+			m.appendSystemMsg("Usage: /buddy species <name>  (duck, cat, ghost, robot, bear)")
+			return
+		}
+		m.buddy.SetSpecies(args[1])
+		m.appendSystemMsg(fmt.Sprintf("Buddy species set to %s.", args[1]))
+	default:
+		m.appendSystemMsg("Buddy commands: /buddy [on|off|species <name>]")
+	}
+}
+
+func defaultBuddyFrame() string {
+	return "  __\n (o>\n /| \n / |"
 }
 
 func slashHelpText() string {
@@ -226,12 +288,14 @@ func slashHelpText() string {
 		{"/exit", "Exit the application"},
 		{"/quit", "Exit the application"},
 		{"/clear", "Clear the screen"},
+		{"/buddy", "Toggle buddy display (on/off/species)"},
 	}
 	var b strings.Builder
 	b.WriteString("Available commands:\n")
 	for _, c := range cmds {
-		b.WriteString(fmt.Sprintf("  %-12s %s\n", c.cmd, c.desc))
+		b.WriteString(fmt.Sprintf("  %-16s %s\n", c.cmd, c.desc))
 	}
+	b.WriteString("\nInput tips: Ctrl+J to insert newline (up to 5 lines)")
 	return b.String()
 }
 
@@ -344,6 +408,12 @@ func (m AppModel) renderHeader() string {
 }
 
 func (m AppModel) renderStatusLine() string {
-	sl := StatusLineFromState(m.modelName, m.tokens, m.cost, m.permMode, m.sessionID)
+	sl := StatusLineFromState(
+		m.modelName,
+		&m.costTracker,
+		m.permMode,
+		m.sessionID,
+		m.gitBranch.Branch(),
+	)
 	return lipgloss.NewStyle().Faint(true).Render(sl.Render(m.width))
 }

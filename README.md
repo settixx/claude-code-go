@@ -72,6 +72,7 @@ That's it. No `npm install`, no config files required.
 - Real-time token streaming with thinking support
 - Multi-model support with alias shortcuts
 - Permission system with security validator chain
+- CLAUDE.md config with frontmatter, file locking & trust system
 
 </td>
 <td>
@@ -97,10 +98,11 @@ That's it. No `npm install`, no config files required.
 <td>
 
 **DX**
-- 15+ slash commands (`/commit`, `/review`, `/export`, `/doctor`, ...)
-- Plan mode for read-only exploration
+- 20+ slash commands (`/commit`, `/review`, `/plan`, `/agents`, `/tasks`, ...)
+- Plan mode toggle for read-only exploration
 - Context compaction with token-aware budget
-- Session persistence, resume & export
+- Bridge protocol with WebSocket renderer for IDE integration
+- Notification system with rate limiting
 
 </td>
 </tr>
@@ -150,6 +152,12 @@ ticode --version                          # Version info
 | `/resume` | List and resume previous sessions |
 | `/export` | Export conversation to file |
 | `/memory` | Show or edit memory files |
+| `/plan` | Toggle plan mode (read-only) |
+| `/agents` | List active agents |
+| `/tasks` | List active tasks |
+| `/mcp` | Show MCP server status |
+| `/skills` | List available skills |
+| `/buddy` | Toggle buddy companion display |
 | `/exit` | Exit the REPL |
 
 </details>
@@ -240,14 +248,15 @@ Skills are loaded from three sources: **bundled** (shipped with the binary), **u
 cmd/ticode/             Entry point
 internal/
 ├── api/                LLM client · streaming · models · cost · retry
-├── bridge/             IDE / headless integration protocol
+├── bridge/             IDE / headless integration · WebSocket renderer
 ├── buddy/              Virtual companion (sprites · mood · observer)
-├── cli/                Flags · REPL · slash commands (core + dev + session)
-├── config/             Paths · CLAUDE.md · config loading
+├── cli/                Flags · REPL · slash commands (core + dev + session + agents + tasks + MCP + plan)
+├── config/             Paths · CLAUDE.md · frontmatter · file locking · trust
 ├── coordinator/        Multi-agent: orchestrator · pool · teams · worktrees
 ├── errors/             Structured error types
 ├── interfaces/         Core interface definitions
-├── mcp/                MCP client · SSE transport · OAuth · prompts · tools
+├── mcp/                MCP client · SSE transport · OAuth · prompts · bootstrap · adapter
+├── notify/             Desktop notifications · rate limiting
 ├── permissions/        Checker · rules · classifier · security chain
 ├── query/              Engine · compaction · token budget · system prompt
 ├── skills/             Skill registry · loader · discovery · skill-as-tool
@@ -263,7 +272,7 @@ internal/
 │   ├── mcptool/        MCP tool execution
 │   ├── lsp/            Language server protocol tool
 │   └── ...             14 more built-in tools
-├── tui/                Bubble Tea v2 · model · input · viewport · permissions
+├── tui/                Bubble Tea v2 · model · input · viewport · permissions · buddy widget · cost tracker · git branch · markdown · syntax highlight
 ├── types/              Shared types (message · config · tool · IDs)
 └── version/            Build version injection
 test/
@@ -281,7 +290,9 @@ test/
 | Widgets | [Bubbles](https://github.com/charmbracelet/bubbles) |
 | Forms | [Huh](https://github.com/charmbracelet/huh) |
 | Markdown | [Glamour](https://github.com/charmbracelet/glamour) |
-| Syntax | [Chroma](https://github.com/alecthomas/chroma) |
+| Syntax | [Chroma v2](https://github.com/alecthomas/chroma) |
+| Markdown | [Glamour](https://github.com/charmbracelet/glamour) |
+| WebSocket | [gorilla/websocket](https://github.com/gorilla/websocket) |
 | JSON | `encoding/json` + [jsonc](https://github.com/tidwall/jsonc) |
 
 ## Development

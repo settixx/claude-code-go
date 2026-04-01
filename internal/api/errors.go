@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	apierrors "github.com/settixx/claude-code-go/internal/errors"
@@ -56,22 +57,32 @@ func ParseAPIErrorResponse(resp *http.Response) *apierrors.APIError {
 // classifyError builds an APIError from a status code and response body,
 // setting the Retryable flag based on the error type.
 func classifyError(statusCode int, body []byte, headers http.Header) *apierrors.APIError {
+	retryAfter := ParseRetryAfter(headers)
+
 	var parsed apiErrorBody
 	if err := json.Unmarshal(body, &parsed); err == nil && parsed.Error.Type != "" {
-		return &apierrors.APIError{
+		apiErr := &apierrors.APIError{
 			StatusCode: statusCode,
 			Type:       parsed.Error.Type,
 			Message:    parsed.Error.Message,
 			Retryable:  classifyRetryable(statusCode),
 		}
+		if retryAfter > 0 {
+			storeRetryAfter(apiErr, retryAfter)
+		}
+		return apiErr
 	}
 
-	return &apierrors.APIError{
+	apiErr := &apierrors.APIError{
 		StatusCode: statusCode,
 		Type:       "unknown",
 		Message:    truncateBody(body, 512),
 		Retryable:  classifyRetryable(statusCode),
 	}
+	if retryAfter > 0 {
+		storeRetryAfter(apiErr, retryAfter)
+	}
+	return apiErr
 }
 
 // classifyRetryable determines whether a request with the given status code
@@ -156,4 +167,19 @@ func truncateBody(body []byte, maxLen int) string {
 		return string(body)
 	}
 	return string(body[:maxLen]) + "..."
+}
+
+// retryAfterStore maps APIError pointers to their Retry-After seconds.
+// This avoids modifying the shared APIError struct in internal/errors.
+var retryAfterStore sync.Map
+
+func storeRetryAfter(apiErr *apierrors.APIError, seconds int) {
+	retryAfterStore.Store(apiErr, seconds)
+}
+
+func loadRetryAfter(apiErr *apierrors.APIError) int {
+	if v, ok := retryAfterStore.LoadAndDelete(apiErr); ok {
+		return v.(int)
+	}
+	return 0
 }

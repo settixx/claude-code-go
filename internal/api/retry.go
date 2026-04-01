@@ -126,12 +126,19 @@ func computeDelay(attempt int, cfg RetryConfig, apiErr *apierrors.APIError) time
 	return time.Duration(base + jitter)
 }
 
-// parseRetryAfterFromError is a best-effort extraction when the API error
-// was created from a parsed response. The retry-after value is stored in
-// the error message fallback path; the primary path uses ParseRetryAfter
-// on the original headers during classifyError. We return 0 here if not
-// applicable — computeDelay falls through to exponential backoff.
-func parseRetryAfterFromError(_ *apierrors.APIError) int {
+// parseRetryAfterFromError extracts the Retry-After value that was stored
+// during error classification. Falls back to reasonable defaults for
+// rate-limit (429) and overloaded (529) errors.
+func parseRetryAfterFromError(apiErr *apierrors.APIError) int {
+	if stored := loadRetryAfter(apiErr); stored > 0 {
+		return stored
+	}
+	if apiErr.StatusCode == 429 {
+		return 5
+	}
+	if apiErr.StatusCode == 529 {
+		return 10
+	}
 	return 0
 }
 

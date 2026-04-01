@@ -6,9 +6,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/settixx/claude-code-go/internal/config"
+	"github.com/settixx/claude-code-go/internal/errors"
 	"github.com/settixx/claude-code-go/internal/interfaces"
+	"github.com/settixx/claude-code-go/internal/storage"
 	"github.com/settixx/claude-code-go/internal/types"
 )
+
+// ClaudeMDProvider is the subset of config.Provider that the engine needs
+// to fetch CLAUDE.md rules. Satisfied by *config.Provider.
+type ClaudeMDProvider interface {
+	GetClaudeMDRules() *config.ClaudeMDRules
+}
 
 // EngineConfig holds the dependencies and options needed to construct an Engine.
 type EngineConfig struct {
@@ -26,6 +35,9 @@ type EngineConfig struct {
 
 	// Renderer handles terminal output.
 	Renderer interfaces.Renderer
+
+	// PermissionChecker evaluates tool invocations against the permission policy.
+	PermissionChecker interfaces.PermissionChecker
 
 	// SystemPrompt is the static system prompt override. When empty,
 	// BuildSystemPrompt generates one from the remaining fields.
@@ -51,6 +63,12 @@ type EngineConfig struct {
 
 	// CWD is the working directory reported to the model.
 	CWD string
+
+	// ConfigProvider supplies CLAUDE.md rules for system prompt injection.
+	ConfigProvider ClaudeMDProvider
+
+	// MemoryDir is the directory to load .claude/memory.md from. Typically CWD.
+	MemoryDir string
 
 	// StopHooks are invoked when the model produces a terminal response.
 	StopHooks []StopHook
@@ -97,13 +115,14 @@ func (e *Engine) Run(ctx context.Context, userMessage string) error {
 	queryConfig := e.buildQueryConfig(systemPrompt)
 
 	lCfg := loopConfig{
-		client:   e.cfg.LLMClient,
-		executor: e.cfg.ToolExecutor,
-		renderer: e.cfg.Renderer,
-		budget:   e.budget,
-		query:    queryConfig,
-		maxTurns: e.cfg.MaxTurns,
-		hooks:    e.cfg.StopHooks,
+		client:      e.cfg.LLMClient,
+		executor:    e.cfg.ToolExecutor,
+		renderer:    e.cfg.Renderer,
+		permissions: e.cfg.PermissionChecker,
+		budget:      e.budget,
+		query:       queryConfig,
+		maxTurns:    e.cfg.MaxTurns,
+		hooks:       e.cfg.StopHooks,
 	}
 
 	response, reason, err := runLoop(ctx, lCfg, e.history)
@@ -119,6 +138,9 @@ func (e *Engine) Run(ctx context.Context, userMessage string) error {
 	e.persistSession(response)
 
 	if err != nil {
+		if errors.IsAbortError(err) || ctx.Err() != nil {
+			return nil
+		}
 		e.cfg.Renderer.RenderError(err)
 		return err
 	}
@@ -140,8 +162,24 @@ func (e *Engine) resolveSystemPrompt() string {
 		return e.cfg.SystemPrompt
 	}
 	spCfg := DefaultSystemPromptConfig(e.cfg.CWD, e.cfg.Model, "")
-	spCfg.CustomPrompt = e.cfg.CustomPrompt
+
+	customPrompt := e.cfg.CustomPrompt
+	if e.cfg.ConfigProvider != nil {
+		if rules := e.cfg.ConfigProvider.GetClaudeMDRules(); rules != nil && rules.Content != "" {
+			customPrompt = rules.Content + "\n\n" + customPrompt
+		}
+	}
+	spCfg.CustomPrompt = customPrompt
 	spCfg.AppendPrompt = e.cfg.AppendPrompt
+
+	if e.cfg.MemoryDir != "" {
+		mem, err := storage.LoadMemory(e.cfg.MemoryDir)
+		if err != nil {
+			slog.Warn("engine: failed to load memory", "dir", e.cfg.MemoryDir, "error", err)
+		} else if mem != "" {
+			spCfg.MemoryPrompt = mem
+		}
+	}
 
 	if e.cfg.ToolExecutor != nil {
 		enabled := make(map[string]bool)

@@ -23,11 +23,6 @@ func registerDevCommands(reg *CommandRegistry) {
 		Handler:     cmdDiff,
 	})
 	reg.Register(&Command{
-		Name:        "review",
-		Description: "Request a code review of recent changes",
-		Handler:     cmdReview,
-	})
-	reg.Register(&Command{
 		Name:        "doctor",
 		Description: "Run environment diagnostics",
 		Handler:     cmdDoctor,
@@ -150,11 +145,6 @@ func colorizeDiff(raw string) string {
 		b.WriteByte('\n')
 	}
 	return strings.TrimRight(b.String(), "\n")
-}
-
-func cmdReview(_ string, _ *CommandContext) error {
-	fmt.Fprintln(os.Stdout, tui.Blue("ℹ Code review not yet implemented."))
-	return nil
 }
 
 func cmdDoctor(_ string, ctx *CommandContext) error {

@@ -5,20 +5,25 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 
-	"github.com/settixx/claude-code-go/internal/tui"
+	"github.com/settixx/claude-code-go/internal/api"
+	"github.com/settixx/claude-code-go/internal/config"
+	"github.com/settixx/claude-code-go/internal/interfaces"
+	"github.com/settixx/claude-code-go/internal/permissions"
+	"github.com/settixx/claude-code-go/internal/query"
+	"github.com/settixx/claude-code-go/internal/state"
+	"github.com/settixx/claude-code-go/internal/storage"
+	"github.com/settixx/claude-code-go/internal/tools"
 	"github.com/settixx/claude-code-go/internal/types"
 )
 
 // PrintConfig holds parameters for non-interactive (print) mode.
 type PrintConfig struct {
-	// Model overrides the default model for this invocation.
-	Model string
-	// Verbose enables extra diagnostic output.
-	Verbose bool
-	// OutputFormat selects the output format: "text" (default), "json", or "stream-json".
+	Model        string
+	Verbose      bool
 	OutputFormat string
 }
 
@@ -29,9 +34,19 @@ func RunPrint(ctx context.Context, prompt string, cfg PrintConfig) error {
 		return fmt.Errorf("no prompt provided for print mode")
 	}
 
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("getwd: %w", err)
+	}
+
 	model := cfg.Model
 	if model == "" {
-		model = "claude-sonnet-4-20250514"
+		model = resolveModel("")
+	}
+
+	apiKey := resolveAPIKey(CLIFlags{}, cwd)
+	if apiKey == "" {
+		return fmt.Errorf("no API key found. Set ANTHROPIC_API_KEY env var, or add customApiKey to ~/.claude/settings.json")
 	}
 
 	if cfg.Verbose {
@@ -39,11 +54,48 @@ func RunPrint(ctx context.Context, prompt string, cfg PrintConfig) error {
 			model, outputFormat(cfg.OutputFormat), len(prompt))
 	}
 
-	fmt.Fprintln(os.Stdout, tui.Dim("(print mode — LLM client not yet connected)"))
-	fmt.Fprintf(os.Stdout, "Prompt: %s\n", prompt)
-	fmt.Fprintf(os.Stdout, "Model:  %s\n", model)
-	fmt.Fprintln(os.Stdout, tui.Blue("ℹ Response streaming will be available once LLMClient is wired."))
+	llmClient := api.NewClient(api.ClientConfig{
+		APIKey:       apiKey,
+		DefaultModel: model,
+	})
 
+	toolRegistry := types.NewToolRegistry()
+	tools.RegisterCoreTools(toolRegistry)
+	tools.RegisterExtendedTools(toolRegistry)
+
+	checker := permissions.NewChecker(types.PermBypassPermissions, nil)
+	executor := NewPermissionAwareExecutor(toolRegistry, checker)
+
+	sessionStore := storage.NewFileStorage(config.SessionDir())
+
+	stateStore := state.NewStore(types.AppState{
+		MainLoopModel:     model,
+		Verbose:           cfg.Verbose,
+		PermissionMode:    types.PermBypassPermissions,
+		Tasks:             make(map[string]*types.TaskState),
+		AgentNameRegistry: make(map[string]types.AgentId),
+	})
+
+	renderer, jsonCollector := selectPrintRenderer(cfg.OutputFormat)
+
+	engine := query.NewEngine(query.EngineConfig{
+		LLMClient:      llmClient,
+		ToolExecutor:   executor,
+		StateStore:     stateStore,
+		SessionStorage: sessionStore,
+		Renderer:       renderer,
+		Model:          model,
+		CWD:            cwd,
+	})
+
+	if err := engine.Run(ctx, prompt); err != nil {
+		slog.Error("print mode engine run failed", "error", err)
+		return err
+	}
+
+	if jsonCollector != nil {
+		return jsonCollector.Flush()
+	}
 	return nil
 }
 
@@ -79,31 +131,21 @@ func outputFormat(f string) string {
 	return f
 }
 
-// buildPrintStreamHandler returns a tui.QueryFunc stub for print mode
-// that writes streaming events to stdout. This is a temporary shim until
-// the real LLMClient is integrated.
-func buildPrintStreamHandler() tui.QueryFunc {
-	return func(ctx context.Context, input string, events chan<- types.StreamEvent) error {
-		defer close(events)
-
-		events <- types.StreamEvent{
-			Type: types.EventContentBlockStart,
-			ContentBlock: &types.ContentBlock{
-				Type: types.ContentText,
-			},
-		}
-		events <- types.StreamEvent{
-			Type: types.EventContentBlockDelta,
-			Delta: &types.DeltaBlock{
-				Type: "text_delta",
-				Text: "(LLM client not yet connected — echo) " + input,
-			},
-		}
-		events <- types.StreamEvent{Type: types.EventContentBlockStop}
-		events <- types.StreamEvent{Type: types.EventMessageStop}
-		return nil
+// selectPrintRenderer picks the appropriate renderer for print mode based on
+// the output format. Returns the renderer and, for "json" format only, the
+// collector that must be flushed after the engine finishes.
+func selectPrintRenderer(format string) (interfaces.Renderer, *JSONCollectRenderer) {
+	switch format {
+	case "stream-json":
+		return NewJSONStreamRenderer(), nil
+	case "json":
+		c := NewJSONCollectRenderer()
+		return c, c
+	default:
+		return NewStdRenderer(), nil
 	}
 }
+
 
 // MergePromptWithStdin combines a CLI positional arg with piped stdin.
 // If both are present, stdin is appended after a blank line.

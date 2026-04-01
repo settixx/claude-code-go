@@ -20,22 +20,35 @@ func FormatMarkdown(text string) string {
 	lines := strings.Split(text, "\n")
 	var out strings.Builder
 	inCodeBlock := false
+	var codeLang string
+	var codeLines []string
 
 	for _, line := range lines {
 		if strings.HasPrefix(line, "```") {
-			inCodeBlock = !inCodeBlock
-			if inCodeBlock {
+			if !inCodeBlock {
+				inCodeBlock = true
+				codeLang = strings.TrimPrefix(line, "```")
+				codeLang = strings.TrimSpace(codeLang)
+				codeLines = nil
 				out.WriteString(Dim("  ┌─"))
+				out.WriteByte('\n')
 			} else {
+				highlighted := HighlightCode(strings.Join(codeLines, "\n"), codeLang)
+				for _, hl := range strings.Split(highlighted, "\n") {
+					out.WriteString("  │ " + hl)
+					out.WriteByte('\n')
+				}
 				out.WriteString(Dim("  └─"))
+				out.WriteByte('\n')
+				inCodeBlock = false
+				codeLang = ""
+				codeLines = nil
 			}
-			out.WriteByte('\n')
 			continue
 		}
 
 		if inCodeBlock {
-			out.WriteString(Dim("  │ " + line))
-			out.WriteByte('\n')
+			codeLines = append(codeLines, line)
 			continue
 		}
 
@@ -131,7 +144,7 @@ func formatCodeSpans(s string) string {
 func FormatContentBlock(block types.ContentBlock) string {
 	switch block.Type {
 	case types.ContentText:
-		return FormatMarkdown(block.Text)
+		return RenderMarkdown(block.Text)
 	case types.ContentToolUse:
 		input := formatJSONCompact(block.Input)
 		return FormatToolUse(block.Name, input)

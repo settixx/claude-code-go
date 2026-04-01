@@ -2,6 +2,7 @@ package api
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -106,6 +107,71 @@ func ReadSSEStream(body io.ReadCloser) <-chan types.StreamEvent {
 	return ch
 }
 
+// StreamWithRecovery sends a streaming request with automatic reconnection
+// on mid-stream disconnects. It retries up to maxRetries times, forwarding
+// all events to the returned channel.
+func (c *Client) StreamWithRecovery(ctx context.Context, config types.QueryConfig, messages []types.Message, maxRetries int) (<-chan types.StreamEvent, error) {
+	if maxRetries <= 0 {
+		maxRetries = 3
+	}
+
+	out := make(chan types.StreamEvent, 16)
+	go func() {
+		defer close(out)
+		for attempt := 0; attempt <= maxRetries; attempt++ {
+			ch, err := c.streamOnce(ctx, config, messages)
+			if err != nil {
+				if attempt >= maxRetries {
+					out <- newErrorEvent("stream_recovery_failed", err.Error())
+					return
+				}
+				slog.Warn("stream connect failed, retrying", "attempt", attempt+1, "error", err)
+				continue
+			}
+
+			completed := false
+			for evt := range ch {
+				out <- evt
+				if evt.Type == types.EventMessageStop {
+					completed = true
+				}
+			}
+			if completed {
+				return
+			}
+			slog.Warn("stream disconnected before message_stop, retrying", "attempt", attempt+1)
+		}
+		out <- newErrorEvent("stream_recovery_exhausted", "max retries exceeded without message_stop")
+	}()
+	return out, nil
+}
+
+// streamOnce performs a single streaming request (no retry).
+func (c *Client) streamOnce(ctx context.Context, config types.QueryConfig, messages []types.Message) (<-chan types.StreamEvent, error) {
+	body, err := c.buildRequestBody(config, messages, true)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.doRequest(ctx, messagesEndpoint, body)
+	if err != nil {
+		return nil, err
+	}
+	return ReadSSEStream(resp.Body), nil
+}
+
+func newErrorEvent(errType, message string) types.StreamEvent {
+	return types.StreamEvent{
+		Type: types.EventError,
+		Error: &struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		}{
+			Type:    errType,
+			Message: message,
+		},
+	}
+}
+
 func readSSELoop(body io.ReadCloser, ch chan<- types.StreamEvent) {
 	defer close(ch)
 	defer body.Close()
@@ -122,7 +188,7 @@ func readSSELoop(body io.ReadCloser, ch chan<- types.StreamEvent) {
 						Type    string `json:"type"`
 						Message string `json:"message"`
 					}{
-						Type:    "stream_error",
+						Type:    "stream_disconnect",
 						Message: err.Error(),
 					},
 				}

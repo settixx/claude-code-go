@@ -146,3 +146,128 @@ func TestAutoModeWithRules(t *testing.T) {
 		}
 	})
 }
+
+// ---------------------------------------------------------------------------
+// ClaudeMD → ParsePermissionRules → Checker integration
+// ---------------------------------------------------------------------------
+
+func TestClaudeMDRulesFlowIntoChecker(t *testing.T) {
+	content := `# Allowed Tools
+- FileRead
+- Bash(git *)
+
+# Denied Tools
+- PowerShell
+- WebFetch
+`
+	rs, err := ParsePermissionRules(content)
+	if err != nil {
+		t.Fatalf("ParsePermissionRules: %v", err)
+	}
+
+	checker := NewChecker(types.PermDefault, rs)
+
+	tests := []struct {
+		name    string
+		tool    string
+		input   map[string]interface{}
+		allowed bool
+	}{
+		{"allowed FileRead", "FileRead", nil, true},
+		{"allowed git command", "Bash", map[string]interface{}{"command": "git status"}, true},
+		{"denied PowerShell", "PowerShell", nil, false},
+		{"denied WebFetch", "WebFetch", nil, false},
+		{"unknown tool needs confirmation", "Agent", nil, false},
+		{"bash non-git needs confirmation", "Bash", map[string]interface{}{"command": "rm -rf /"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := checker.Check(tt.tool, tt.input)
+			if result.Allowed != tt.allowed {
+				t.Errorf("Check(%q) allowed=%v, want %v (reason: %s)", tt.tool, result.Allowed, tt.allowed, result.Reason)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Checker — decision history
+// ---------------------------------------------------------------------------
+
+func TestCheckerDecisionHistory(t *testing.T) {
+	rules := NewRuleSet()
+	rules.AddAllowRule("FileRead")
+	rules.AddDenyRule("Bash")
+
+	checker := NewChecker(types.PermDefault, rules)
+
+	checker.Check("FileRead", nil)
+	checker.Check("Bash", nil)
+
+	history := checker.DecisionHistory()
+	if len(history) != 0 {
+		t.Errorf("Check() alone should not record history, got %d entries", len(history))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Checker — BuildRequest
+// ---------------------------------------------------------------------------
+
+func TestCheckerBuildRequest(t *testing.T) {
+	checker := NewChecker(types.PermDefault, nil)
+
+	t.Run("bash command", func(t *testing.T) {
+		req := checker.BuildRequest("Bash", map[string]interface{}{"command": "ls -la"})
+		if req.ToolName != "Bash" {
+			t.Errorf("ToolName = %q", req.ToolName)
+		}
+		if req.Description == "" {
+			t.Error("Description should not be empty")
+		}
+	})
+
+	t.Run("file tool", func(t *testing.T) {
+		req := checker.BuildRequest("FileWrite", map[string]interface{}{"file_path": "/tmp/x"})
+		if req.ToolName != "FileWrite" {
+			t.Errorf("ToolName = %q", req.ToolName)
+		}
+	})
+
+	t.Run("no input", func(t *testing.T) {
+		req := checker.BuildRequest("Agent", nil)
+		if req.Description == "" {
+			t.Error("Description should not be empty even with nil input")
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Checker — command pattern rules
+// ---------------------------------------------------------------------------
+
+func TestCheckerCommandPatternRules(t *testing.T) {
+	rules := NewRuleSet()
+	rules.AddAllowCommandRule("Bash", "git *")
+	rules.AddDenyCommandRule("Bash", "rm *")
+
+	checker := NewChecker(types.PermDefault, rules)
+
+	tests := []struct {
+		name    string
+		cmd     string
+		allowed bool
+	}{
+		{"git allowed", "git status", true},
+		{"rm denied", "rm -rf /", false},
+		{"other needs confirmation", "ls -la", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := checker.Check("Bash", map[string]interface{}{"command": tt.cmd})
+			if result.Allowed != tt.allowed {
+				t.Errorf("cmd=%q: allowed=%v, want %v (reason: %s)", tt.cmd, result.Allowed, tt.allowed, result.Reason)
+			}
+		})
+	}
+}

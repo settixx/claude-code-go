@@ -52,6 +52,13 @@ type CommandContext struct {
 	MessageCount int
 	// StartTime records when the current session began.
 	StartTime time.Time
+
+	// StateStore provides access to the centralized AppState (tasks, agents, MCP, etc.).
+	StateStore interfaces.StateStore
+	// BuddyEnabled tracks whether the companion buddy display is active.
+	BuddyEnabled bool
+	// PermissionChecker allows commands to read/write the runtime permission mode.
+	PermissionChecker interfaces.PermissionChecker
 }
 
 // CommandRegistry holds all registered slash commands and provides lookup.

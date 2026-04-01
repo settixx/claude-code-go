@@ -2,11 +2,17 @@ package config
 
 import (
 	"bufio"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
+
+const maxIncludeDepth = 5
+
+var includeRe = regexp.MustCompile(`^@include\s+(.+)$`)
 
 // ClaudeMDRules holds the aggregated permission rules extracted from CLAUDE.md files.
 type ClaudeMDRules struct {
@@ -15,12 +21,11 @@ type ClaudeMDRules struct {
 	Content       string
 }
 
-// LoadClaudeMD searches upward from startDir to the git root (or filesystem root)
-// for CLAUDE.md files. Rules from closer directories take precedence.
-// Returns the merged rules from all discovered files.
+// LoadClaudeMD discovers CLAUDE.md files from multiple scopes (user-global,
+// directory walk up to git root, project rules dirs, and CLAUDE.local.md),
+// merges their rules, and strips HTML comments from the aggregated content.
 func LoadClaudeMD(startDir string) (*ClaudeMDRules, error) {
-	root := findGitRoot(startDir)
-	paths := collectClaudeMDPaths(startDir, root)
+	paths := discoverAllClaudeMDPaths(startDir)
 
 	merged := &ClaudeMDRules{}
 	var sections []string
@@ -35,8 +40,61 @@ func LoadClaudeMD(startDir string) (*ClaudeMDRules, error) {
 			sections = append(sections, rules.Content)
 		}
 	}
-	merged.Content = strings.Join(sections, "\n\n")
+	merged.Content = stripHTMLComments(strings.Join(sections, "\n\n"))
 	return merged, nil
+}
+
+// discoverAllClaudeMDPaths collects CLAUDE.md paths from every scope:
+//  1. User-global: ~/.claude/CLAUDE.md
+//  2. User-global rules: ~/.claude/rules/*.md
+//  3. Directory walk: startDir up to git root (deepest-first)
+//  4. Project rules: startDir/.claude/rules/*.md
+//  5. Local override: startDir/CLAUDE.local.md
+func discoverAllClaudeMDPaths(startDir string) []string {
+	var paths []string
+
+	home := homeDir()
+	paths = appendIfExists(paths, filepath.Join(home, ".claude", "CLAUDE.md"))
+	paths = append(paths, collectMDsInDir(filepath.Join(home, ".claude", "rules"))...)
+
+	root := findGitRoot(startDir)
+	paths = append(paths, collectClaudeMDPaths(startDir, root)...)
+
+	paths = append(paths, collectMDsInDir(filepath.Join(startDir, ".claude", "rules"))...)
+
+	paths = appendIfExists(paths, filepath.Join(startDir, "CLAUDE.local.md"))
+
+	return paths
+}
+
+// collectMDsInDir returns all *.md files in dir, sorted by name.
+func collectMDsInDir(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var paths []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(strings.ToLower(e.Name()), ".md") {
+			continue
+		}
+		paths = append(paths, filepath.Join(dir, e.Name()))
+	}
+	return paths
+}
+
+func appendIfExists(paths []string, path string) []string {
+	if _, err := os.Stat(path); err == nil {
+		return append(paths, path)
+	}
+	return paths
+}
+
+var htmlCommentRe = regexp.MustCompile(`(?s)<!--.*?-->`)
+
+// stripHTMLComments removes all <!-- ... --> blocks from s.
+func stripHTMLComments(s string) string {
+	return htmlCommentRe.ReplaceAllString(s, "")
 }
 
 // collectClaudeMDPaths walks from startDir up to root, collecting every
@@ -61,7 +119,65 @@ func collectClaudeMDPaths(startDir, root string) []string {
 	return paths
 }
 
+// resolveIncludes processes @include directives in content, inlining referenced
+// files. Supports up to maxIncludeDepth levels of recursion with cycle detection.
+func resolveIncludes(content string, basePath string, depth int, visited map[string]bool) string {
+	if depth >= maxIncludeDepth {
+		return content
+	}
+
+	var result strings.Builder
+	for _, line := range strings.Split(content, "\n") {
+		m := includeRe.FindStringSubmatch(strings.TrimSpace(line))
+		if m == nil {
+			result.WriteString(line)
+			result.WriteByte('\n')
+			continue
+		}
+
+		includePath := resolveIncludePath(m[1], basePath)
+		if includePath == "" || visited[includePath] {
+			continue
+		}
+
+		data, err := os.ReadFile(includePath)
+		if err != nil {
+			log.Printf("config: @include %q: %v", m[1], err)
+			continue
+		}
+
+		visited[includePath] = true
+		resolved := resolveIncludes(string(data), filepath.Dir(includePath), depth+1, visited)
+		result.WriteString(resolved)
+		if !strings.HasSuffix(resolved, "\n") {
+			result.WriteByte('\n')
+		}
+	}
+	return result.String()
+}
+
+func resolveIncludePath(raw string, baseDir string) string {
+	raw = strings.TrimSpace(raw)
+	raw = strings.Trim(raw, "\"'")
+	if raw == "" {
+		return ""
+	}
+	if filepath.IsAbs(raw) {
+		abs, err := filepath.Abs(raw)
+		if err != nil {
+			return ""
+		}
+		return abs
+	}
+	abs, err := filepath.Abs(filepath.Join(baseDir, raw))
+	if err != nil {
+		return ""
+	}
+	return abs
+}
+
 // parseClaudeMDFile reads a single CLAUDE.md and extracts allow/deny patterns.
+// It resolves @include directives and checks YAML frontmatter conditions.
 //
 // Recognised line formats inside fenced sections:
 //
@@ -71,15 +187,32 @@ func collectClaudeMDPaths(startDir, root string) []string {
 //	# Denied tools
 //	- pattern
 func parseClaudeMDFile(path string) (*ClaudeMDRules, error) {
-	f, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	content := string(data)
 
+	fm, content := ParseFrontmatter(content)
+	if !fm.ShouldApply(filepath.Dir(path)) {
+		return &ClaudeMDRules{}, nil
+	}
+
+	visited := map[string]bool{}
+	absPath, _ := filepath.Abs(path)
+	if absPath != "" {
+		visited[absPath] = true
+	}
+	content = resolveIncludes(content, filepath.Dir(path), 0, visited)
+
+	return parseClaudeMDContent(content), nil
+}
+
+// parseClaudeMDContent extracts rules from already-resolved CLAUDE.md content.
+func parseClaudeMDContent(content string) *ClaudeMDRules {
 	rules := &ClaudeMDRules{}
 	var contentBuf strings.Builder
-	scanner := bufio.NewScanner(f)
+	scanner := bufio.NewScanner(strings.NewReader(content))
 
 	const (
 		sectionNone  = ""
@@ -115,7 +248,7 @@ func parseClaudeMDFile(path string) (*ClaudeMDRules, error) {
 	}
 
 	rules.Content = strings.TrimSpace(contentBuf.String())
-	return rules, scanner.Err()
+	return rules
 }
 
 func isHeading(line string) bool {

@@ -78,7 +78,7 @@ func renderUserMsg(msg DisplayMessage, s viewportStyles, width int) string {
 
 func renderAssistantMsg(msg DisplayMessage, s viewportStyles, width int) string {
 	header := s.assistantHeader.Render("Ti Code")
-	body := FormatMarkdown(msg.Content)
+	body := RenderMarkdown(msg.Content)
 	body = wrapContent(body, width-2)
 	return header + "\n" + indentBlock(body, 2)
 }

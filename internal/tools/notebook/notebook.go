@@ -30,8 +30,8 @@ func New() *Tool {
 }
 
 func (t *Tool) Description(_ map[string]interface{}) (string, error) {
-	return "Edit a cell in a Jupyter notebook (.ipynb file). " +
-		"Reads the notebook JSON, modifies the specified cell's source, and writes it back.", nil
+	return "Edit or insert a cell in a Jupyter notebook (.ipynb file). " +
+		"Set is_new_cell to true to insert a new cell at the given index.", nil
 }
 
 func (t *Tool) InputSchema() types.ToolInputSchema {
@@ -44,11 +44,19 @@ func (t *Tool) InputSchema() types.ToolInputSchema {
 			},
 			"cell_index": map[string]interface{}{
 				"type":        "integer",
-				"description": "0-based index of the cell to edit.",
+				"description": "0-based index of the cell to edit or insert at.",
 			},
 			"new_source": map[string]interface{}{
 				"type":        "string",
 				"description": "The new source content for the cell.",
+			},
+			"is_new_cell": map[string]interface{}{
+				"type":        "boolean",
+				"description": "If true, insert a new cell at cell_index instead of editing an existing one.",
+			},
+			"cell_language": map[string]interface{}{
+				"type":        "string",
+				"description": "Language/type for new cells: 'python', 'markdown', 'raw', etc. Defaults to 'python'.",
 			},
 		},
 		Required: []string{"notebook_path", "cell_index", "new_source"},
@@ -68,12 +76,21 @@ func (t *Tool) Call(_ context.Context, input map[string]interface{}) (*types.Too
 	if err != nil {
 		return nil, err
 	}
+	isNewCell := toolutil.OptionalBool(input, "is_new_cell", false)
+	cellLang := toolutil.OptionalString(input, "cell_language", "python")
 
 	nb, err := readNotebook(nbPath)
 	if err != nil {
 		return &types.ToolResult{Data: fmt.Sprintf("Failed to read notebook: %v", err)}, nil
 	}
 
+	if isNewCell {
+		return insertNewCell(nb, nbPath, cellIndex, newSource, cellLang)
+	}
+	return editExistingCell(nb, nbPath, cellIndex, newSource)
+}
+
+func editExistingCell(nb *notebook, nbPath string, cellIndex int, newSource string) (*types.ToolResult, error) {
 	if cellIndex >= len(nb.Cells) {
 		return &types.ToolResult{
 			Data: fmt.Sprintf("Cell index %d out of range (notebook has %d cells)", cellIndex, len(nb.Cells)),
@@ -89,6 +106,47 @@ func (t *Tool) Call(_ context.Context, input map[string]interface{}) (*types.Too
 	return &types.ToolResult{
 		Data: fmt.Sprintf("Updated cell %d in %s", cellIndex, nbPath),
 	}, nil
+}
+
+func insertNewCell(nb *notebook, nbPath string, cellIndex int, newSource, cellLang string) (*types.ToolResult, error) {
+	if cellIndex > len(nb.Cells) {
+		cellIndex = len(nb.Cells)
+	}
+
+	cellType := resolveCellType(cellLang)
+	newCell := cell{
+		CellType: cellType,
+		Source:   splitSourceLines(newSource),
+		Metadata: map[string]interface{}{},
+	}
+	if cellType == "code" {
+		newCell.Outputs = []interface{}{}
+	}
+
+	cells := make([]cell, 0, len(nb.Cells)+1)
+	cells = append(cells, nb.Cells[:cellIndex]...)
+	cells = append(cells, newCell)
+	cells = append(cells, nb.Cells[cellIndex:]...)
+	nb.Cells = cells
+
+	if err := writeNotebook(nbPath, nb); err != nil {
+		return &types.ToolResult{Data: fmt.Sprintf("Failed to write notebook: %v", err)}, nil
+	}
+
+	return &types.ToolResult{
+		Data: fmt.Sprintf("Inserted new %s cell at index %d in %s", cellType, cellIndex, nbPath),
+	}, nil
+}
+
+func resolveCellType(lang string) string {
+	switch strings.ToLower(lang) {
+	case "markdown":
+		return "markdown"
+	case "raw":
+		return "raw"
+	default:
+		return "code"
+	}
 }
 
 type notebook struct {
