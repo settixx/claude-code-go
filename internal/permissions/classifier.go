@@ -1,0 +1,96 @@
+package permissions
+
+import (
+	"strings"
+
+	"github.com/settixx/claude-code-go/internal/types"
+)
+
+var readOnlyTools = map[string]bool{
+	"FileRead":  true,
+	"Glob":      true,
+	"Grep":      true,
+	"LS":        true,
+	"Search":    true,
+	"WebFetch":  true,
+	"TaskOutput": true,
+}
+
+var safeBashPrefixes = []string{
+	"ls", "cat", "head", "tail", "wc", "grep", "rg", "find",
+	"echo", "pwd", "whoami", "env", "printenv", "which", "type",
+	"git status", "git log", "git diff", "git show", "git branch",
+	"git remote", "git tag",
+}
+
+var dangerousBashPrefixes = []string{
+	"rm ", "rm\t", "rmdir ", "chmod ", "chown ", "chgrp ",
+	"mv ", "sudo ", "mkfs", "dd ", "shutdown", "reboot",
+	"git push", "git reset --hard", "git clean -f",
+	"curl ", "wget ",
+}
+
+// Classifier uses heuristics to decide whether a tool invocation should be
+// allowed, denied, or requires user confirmation.
+type Classifier struct{}
+
+// NewClassifier returns a new Classifier.
+func NewClassifier() *Classifier {
+	return &Classifier{}
+}
+
+// Classify returns a PermissionBehavior for the given tool invocation based
+// on built-in heuristics: read-only tools are allowed, known safe bash
+// commands are allowed, dangerous commands require confirmation, and
+// everything else defaults to ask.
+func (c *Classifier) Classify(toolName string, input map[string]interface{}) types.PermissionBehavior {
+	if readOnlyTools[toolName] {
+		return types.BehaviorAllow
+	}
+
+	if toolName == "FileWrite" || toolName == "FileEdit" || toolName == "NotebookEdit" {
+		return c.classifyFileWrite(input)
+	}
+
+	if toolName == "Bash" || toolName == "PowerShell" {
+		return c.classifyBash(input)
+	}
+
+	return types.BehaviorAsk
+}
+
+func (c *Classifier) classifyFileWrite(input map[string]interface{}) types.PermissionBehavior {
+	path, _ := input["file_path"].(string)
+	if path == "" {
+		path, _ = input["path"].(string)
+	}
+	if path == "" {
+		return types.BehaviorAsk
+	}
+
+	if strings.HasPrefix(path, "/etc/") || strings.HasPrefix(path, "/usr/") || strings.HasPrefix(path, "/sys/") {
+		return types.BehaviorAsk
+	}
+	return types.BehaviorAllow
+}
+
+func (c *Classifier) classifyBash(input map[string]interface{}) types.PermissionBehavior {
+	cmd := extractCommand(input)
+	if cmd == "" {
+		return types.BehaviorAsk
+	}
+
+	for _, prefix := range dangerousBashPrefixes {
+		if strings.HasPrefix(cmd, prefix) {
+			return types.BehaviorAsk
+		}
+	}
+
+	for _, prefix := range safeBashPrefixes {
+		if cmd == prefix || strings.HasPrefix(cmd, prefix+" ") || strings.HasPrefix(cmd, prefix+"\t") {
+			return types.BehaviorAllow
+		}
+	}
+
+	return types.BehaviorAsk
+}

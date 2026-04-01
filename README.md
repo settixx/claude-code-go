@@ -1,126 +1,170 @@
-<p align="center">
-  <img src="https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go&logoColor=white" />
-  <img src="https://img.shields.io/badge/License-MIT-blue" />
-  <img src="https://img.shields.io/badge/Status-WIP-orange" />
-</p>
+# Ti Code
 
-<h1 align="center">Ti Code</h1>
+**An AI coding agent that lives in your terminal. Single binary. Zero dependencies. Built with Go.**
 
-<p align="center">
-  An AI coding agent that lives in your terminal. Built with Go.
-</p>
+[![Go 1.23+](https://img.shields.io/badge/Go-1.23+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Status: WIP](https://img.shields.io/badge/Status-WIP-orange)]()
 
-<p align="center">
-  <strong>English</strong> | <a href="./README.zh-CN.md">简体中文</a>
-</p>
+**English** | [简体中文](./README.zh-CN.md)
 
 ---
 
-Ti Code is an AI coding agent for the terminal. It talks to LLMs, reads and writes your code, runs commands, and stays out of your way — all from a single binary with zero runtime dependencies.
+Ti Code is a terminal-native AI coding agent. It talks to LLMs, reads and writes your code, runs commands, and stays out of your way — all from a single binary with zero runtime dependencies.
 
 The TUI is built on [Bubble Tea v2](https://github.com/charmbracelet/bubbletea) and the [Charm](https://charm.sh/) ecosystem. If you've used Claude Code or Gemini CLI, the workflow will feel familiar.
 
-> [!NOTE]
-> This project is under active development. Contributions and feedback are welcome.
+> **Note** — This project is under active development. Contributions and feedback are welcome.
 
-## Why rewrite in Go?
+## Highlights
 
-The original codebase is ~500K lines of TypeScript running on Node/Bun with React (Ink) for terminal UI. It works, but:
+- **Single binary** — `go build` → ship. No Node.js, no `node_modules`, no runtime.
+- **Fast startup** — native Go binary, cold start in single-digit milliseconds.
+- **15 built-in tools** — file read/write/edit, bash, glob, grep, web fetch/search, notebook, todo, config, and more.
+- **Multi-model** — Anthropic Claude (default), with model alias shortcuts (`opus`, `sonnet`, `haiku`).
+- **Streaming** — real-time token streaming with thinking/extended thinking support.
+- **MCP protocol** — built-in MCP client/server for tool extensibility.
+- **Session persistence** — JSON-based session storage with resume support.
+- **Permission system** — configurable permission modes with write-tool classification.
+- **Multi-agent coordinator** — worker pool, team management, worktree isolation.
+- **Buddy system** — virtual companion with mood states and sprites (duck, cat, ghost, robot, bear).
+- **Cost tracking** — per-request and cumulative token/cost accounting.
+- **Slash commands** — `/help`, `/model`, `/status`, `/cost`, `/session`, `/config`, and more.
 
-- **Shipping is painful.** Users need Node.js installed. `node_modules` is 164 MB. Cold start takes 150 ms+.
-- **Distribution should be trivial.** `go build` → single binary → done. Cross-compile with `GOOS` / `GOARCH`.
-- **Concurrency is a first-class citizen.** Goroutines and channels map naturally to streaming LLM responses, parallel tool execution, and subprocess management.
-- **The TUI ecosystem is mature.** Bubble Tea has 41K+ stars, a v2 release (Feb 2026), and 18,000+ dependents. It's production-proven.
-
-This is not a port. The architecture is redesigned around Go idioms — interfaces, composition, and the MVU pattern.
-
-## Getting started
+## Quick Start
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/ti-code.git
-cd ti-code
-go build -o ti-code ./cmd/ti-code
+git clone https://github.com/settixx/claude-code-go.git
+cd claude-code-go
+make build
 ```
 
-Set an API key and run:
+Set your API key and run:
 
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-..."
-./ti-code
+./bin/ticode
 ```
 
-That's it. No `npm install`, no runtime, no config files required.
+That's it. No `npm install`, no config files required.
 
-### Other providers
+## Usage
 
 ```bash
-export OPENAI_API_KEY="sk-..."           # OpenAI
-export OLLAMA_HOST="http://localhost:11434"  # Local models
+ticode                                    # Interactive REPL
+ticode -p "explain this function"         # Single query (print mode)
+ticode -m opus "review main.go"           # Use a specific model
+ticode --resume <session-id>              # Resume a previous session
+cat file.go | ticode -p                   # Pipe stdin
+ticode --version                          # Version info
 ```
 
-### Usage
+### Flags
 
-```bash
-ti-code                                    # Interactive REPL
-ti-code -p "explain this function"         # Single query
-ti-code --print -p "review main.go"        # Non-interactive print mode
-ti-code --version                          # Version info
-```
+| Flag | Short | Description |
+|---|---|---|
+| `--print` | `-p` | Non-interactive print mode |
+| `--model` | `-m` | Model selection (e.g. `opus`, `sonnet`, `haiku`) |
+| `--resume` | `-r` | Resume a session by ID |
+| `--verbose` | `-v` | Enable verbose output |
+| `--permission-mode` | | Set permission mode (`default`) |
+| `--agent` | | Select agent |
+| `--debug` | | Enable debug output |
 
-## Tech stack
+### Slash Commands
 
-| What | Library |
+| Command | Description |
 |---|---|
-| TUI | [Bubble Tea v2](https://github.com/charmbracelet/bubbletea) |
+| `/help` | Show available commands |
+| `/model` | View or switch the active model |
+| `/status` | Show session status |
+| `/cost` | Display token usage and cost |
+| `/config` | View or modify configuration |
+| `/session` | Session management |
+| `/exit` | Exit the REPL |
+
+## Architecture
+
+```
+cmd/ticode/          CLI entry point
+internal/
+├── api/             LLM client, streaming, models, cost tracking, retry
+├── bridge/          Bridge protocol for IDE/headless integration
+├── buddy/           Virtual companion system (sprites, mood, observer)
+├── cli/             Flag parsing, REPL loop, slash command registry
+├── config/          Paths, CLAUDE.md parsing, config loading
+├── coordinator/     Multi-agent: worker pool, teams, worktrees, mailbox
+├── errors/          Structured error types
+├── interfaces/      Core interface definitions
+├── mcp/             MCP protocol client/server, transport, config
+├── permissions/     Permission checker, rules, classifier
+├── query/           Query engine, agent loop, budget, history
+├── state/           Application state store
+├── storage/         Session persistence (file-based)
+├── tools/           15 built-in tools (bash, file*, glob, grep, web*, ...)
+├── tui/             Bubble Tea v2 app, input, renderer, themes, keymap
+├── types/           Shared types (message, config, tool, query, IDs)
+└── version/         Build version injection
+```
+
+## Built-in Tools
+
+### Core (Tier 1)
+
+| Tool | Description |
+|---|---|
+| `Bash` | Execute shell commands |
+| `FileRead` | Read file contents |
+| `FileWrite` | Write files |
+| `FileEdit` | Patch files with search/replace |
+| `Glob` | Find files by pattern |
+| `Grep` | Search file contents with regex |
+
+### Extended (Tier 2)
+
+| Tool | Description |
+|---|---|
+| `WebSearch` | Search the web |
+| `WebFetch` | Fetch URL content |
+| `Notebook` | Edit Jupyter notebooks |
+| `Todo` | Task management |
+| `Config` | View/modify configuration |
+| `Sleep` | Delay execution |
+| `AskUser` | Prompt user for input |
+| `Brief` | Summarize content |
+| `ToolSearch` | Discover available tools |
+
+## Tech Stack
+
+| Component | Library |
+|---|---|
+| TUI framework | [Bubble Tea v2](https://github.com/charmbracelet/bubbletea) |
 | Styling | [Lip Gloss](https://github.com/charmbracelet/lipgloss) |
-| Widgets | [Bubbles](https://github.com/charmbracelet/bubbles) (input, viewport, spinner, table) |
+| Widgets | [Bubbles](https://github.com/charmbracelet/bubbles) |
 | Forms | [Huh](https://github.com/charmbracelet/huh) |
-| CLI | [Cobra](https://github.com/spf13/cobra) + [Viper](https://github.com/spf13/viper) |
 | Markdown | [Glamour](https://github.com/charmbracelet/glamour) |
 | Syntax | [Chroma](https://github.com/alecthomas/chroma) |
-| DB | [go-sqlite3](https://github.com/mattn/go-sqlite3) |
 | JSON | `encoding/json` + [jsonc](https://github.com/tidwall/jsonc) |
-
-## Roadmap
-
-**Phase 1 — Foundation** 🚧
-
-- [ ] Cobra CLI skeleton
-- [ ] Bubble Tea v2 REPL (input + streaming output viewport)
-- [ ] Claude API client with streaming
-- [ ] Core tools: file read, file write, bash
-- [ ] Config via env vars + TOML
-
-**Phase 2 — Agent**
-
-- [ ] Full tool suite (glob, grep, file edit, web fetch)
-- [ ] Agent loop: plan → act → observe
-- [ ] SQLite sessions
-- [ ] Multi-provider support
-- [ ] Glamour markdown rendering
-
-**Phase 3 — Protocol**
-
-- [ ] MCP server & client
-- [ ] LSP integration
-- [ ] Git-aware context
-- [ ] Cost tracking
-
-**Phase 4 — Polish**
-
-- [ ] Vim keybindings
-- [ ] Themes
-- [ ] `brew install` / `scoop install`
-- [ ] Test coverage >80%
 
 ## Development
 
 ```bash
-go run ./cmd/ti-code                                          # Dev run
-go build -ldflags="-s -w" -o ti-code ./cmd/ti-code            # Release build
-go test ./...                                                 # Tests
-golangci-lint run                                             # Lint
-GOOS=linux GOARCH=amd64 go build -o ti-code-linux ./cmd/ti-code  # Cross-compile
+make build                 # Build binary to ./bin/ticode
+make run                   # Build and run
+make test                  # Run tests
+make lint                  # golangci-lint
+make build-all             # Cross-compile (darwin/linux/windows × amd64/arm64)
+make release               # goreleaser release
+make clean                 # Remove build artifacts
+```
+
+### Cross-compilation
+
+The project uses GoReleaser for releases and includes a `build-all` make target:
+
+```bash
+# Manual cross-compile
+GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o ticode-linux ./cmd/ticode
 ```
 
 ### Conventions
@@ -130,14 +174,50 @@ GOOS=linux GOARCH=amd64 go build -o ti-code-linux ./cmd/ti-code  # Cross-compile
 - Interfaces define behavior, structs implement it
 - Table-driven tests: `[]struct{ name, input, want }`
 
+## Roadmap
+
+**Phase 1 — Foundation** `in progress`
+
+- [x] CLI skeleton with flag parsing
+- [x] Bubble Tea v2 REPL (input + streaming output)
+- [x] Claude API client with streaming
+- [x] Core tools: bash, file read/write/edit, glob, grep
+- [x] Extended tools: web search/fetch, notebook, todo, config
+- [x] Slash command system
+- [x] Permission checker
+- [x] Session persistence
+- [x] Cost tracking
+
+**Phase 2 — Agent**
+
+- [x] Multi-agent coordinator (worker pool, teams)
+- [x] Worktree isolation for parallel agents
+- [x] MCP client/server protocol
+- [x] Bridge protocol for IDE integration
+- [ ] Agent loop refinement (plan → act → observe)
+- [ ] Glamour markdown rendering in REPL
+
+**Phase 3 — Protocol**
+
+- [ ] LSP integration
+- [ ] Git-aware context
+- [ ] Memory system (CLAUDE.md integration)
+
+**Phase 4 — Polish**
+
+- [ ] Vim keybindings
+- [ ] Custom themes
+- [ ] `brew install ticode` / `scoop install ticode`
+- [ ] Test coverage > 80%
+
 ## Contributing
 
 Contributions welcome. Fork, branch, test, lint, PR.
 
 ```bash
 git checkout -b feature/your-thing
-go test ./...
-golangci-lint run
+make test
+make lint
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
@@ -147,14 +227,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 - Not affiliated with, endorsed by, or maintained by [Anthropic](https://anthropic.com).
 - "Claude" is a trademark of Anthropic. This project does not claim any rights to it.
 
-If you believe any content in this repository raises a concern, please [open an issue](https://github.com/YOUR_USERNAME/ti-code/issues).
+If you believe any content in this repository raises a concern, please [open an issue](https://github.com/settixx/claude-code-go/issues).
 
 ## License
 
 [MIT](LICENSE)
-
----
-
-<p align="center">
-  Built with Go and the <a href="https://charm.sh/">Charm</a> ecosystem.
-</p>

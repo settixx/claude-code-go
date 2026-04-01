@@ -1,0 +1,50 @@
+project_name: ti-code
+builds:
+  - id: ticode
+    main: ./cmd/ticode
+    binary: ticode
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/settixx/claude-code-go/internal/version.Version={{.Version}}
+      - -X github.com/settixx/claude-code-go/internal/version.GitCommit={{.ShortCommit}}
+      - -X github.com/settixx/claude-code-go/internal/version.BuildDate={{.Date}}
+
+archives:
+  - id: default
+    format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+
+brews:
+  - name: ticode
+    repository:
+      owner: setti
+      name: homebrew-tap
+    homepage: "https://github.com/settixx/claude-code-go"
+    description: "AI coding assistant CLI — Go implementation"
+    install: |
+      bin.install "ticode"
+    test: |
+      system "#{bin}/ticode", "--version"
